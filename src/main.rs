@@ -1,15 +1,22 @@
 #[cfg(not(target_arch = "wasm32"))]
 use std::env;
 #[cfg(not(target_arch = "wasm32"))]
+use std::io::{self, IsTerminal, Write};
+#[cfg(not(target_arch = "wasm32"))]
 use std::path::{Path, PathBuf};
+#[cfg(not(target_arch = "wasm32"))]
+use std::sync::Mutex;
+#[cfg(not(target_arch = "wasm32"))]
+use std::time::{Duration, Instant};
 
 #[cfg(not(target_arch = "wasm32"))]
 use serde::Deserialize;
 
 #[cfg(not(target_arch = "wasm32"))]
 use spectral_matcher::{
-    NetworkBuildParams, ParseConfig, SearchQueryKey, SearchRequest, build_network_artifact,
-    run_search_request, save_json_to_path, save_tsv_to_path, serve,
+    JobProgressStage, NetworkBuildParams, ParseConfig, SearchQueryKey, SearchRequest,
+    build_network_artifact_with_progress, run_search_request_with_progress, save_json_to_path,
+    save_tsv_to_path, serve,
 };
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -68,6 +75,123 @@ struct NetworkJobConfig {
     #[serde(default)]
     parse: ParseConfig,
     build: NetworkBuildParams,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+struct CliProgressState {
+    last_stage: Option<JobProgressStage>,
+    last_percent: u64,
+    last_render: Option<Instant>,
+    last_width: usize,
+    rendered: bool,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+struct CliProgress {
+    prefix: String,
+    enabled: bool,
+    state: Mutex<CliProgressState>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl CliProgress {
+    fn new(prefix: impl Into<String>) -> Self {
+        Self {
+            prefix: prefix.into(),
+            enabled: io::stderr().is_terminal(),
+            state: Mutex::new(CliProgressState {
+                last_stage: None,
+                last_percent: 0,
+                last_render: None,
+                last_width: 0,
+                rendered: false,
+            }),
+        }
+    }
+
+    fn update(&self, stage: JobProgressStage, completed: u64, total: u64) {
+        if !self.enabled {
+            return;
+        }
+
+        let total = total.max(1);
+        let completed = completed.min(total);
+        let percent = completed.saturating_mul(100) / total;
+        let Ok(mut state) = self.state.lock() else {
+            return;
+        };
+        let now = Instant::now();
+        let stage_changed = state.last_stage != Some(stage);
+        let percent_changed = state.last_percent != percent;
+        let is_complete = completed >= total;
+        let due = state
+            .last_render
+            .is_none_or(|last| now.duration_since(last) >= Duration::from_millis(100));
+
+        if !stage_changed && !is_complete && (!percent_changed || !due) {
+            return;
+        }
+
+        let message = format!(
+            "\r{} {} {} {:>3}% {}/{}",
+            self.prefix,
+            render_bar(percent),
+            progress_stage_label(stage),
+            percent,
+            completed,
+            total
+        );
+        let pad = state.last_width.saturating_sub(message.len());
+        eprint!("{message}{:pad$}", "");
+        let _ = io::stderr().flush();
+
+        state.last_stage = Some(stage);
+        state.last_percent = percent;
+        state.last_render = Some(now);
+        state.last_width = message.len();
+        state.rendered = true;
+    }
+
+    fn finish(&self, summary: &str) {
+        if !self.enabled {
+            return;
+        }
+        let Ok(mut state) = self.state.lock() else {
+            return;
+        };
+        if !state.rendered {
+            return;
+        }
+        let message = format!("\r{} {summary}", self.prefix);
+        let pad = state.last_width.saturating_sub(message.len());
+        eprintln!("{message}{:pad$}", "");
+        state.last_width = 0;
+        state.rendered = false;
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn render_bar(percent: u64) -> String {
+    let width = 24usize;
+    let filled = ((percent.min(100) as usize) * width) / 100;
+    format!(
+        "[{}{}]",
+        "#".repeat(filled),
+        "-".repeat(width.saturating_sub(filled))
+    )
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn progress_stage_label(stage: JobProgressStage) -> &'static str {
+    match stage {
+        JobProgressStage::Queued => "queued",
+        JobProgressStage::LoadingSpectra => "loading spectra",
+        JobProgressStage::LoadingQuery => "loading query",
+        JobProgressStage::LoadingLibrary => "loading library",
+        JobProgressStage::Scoring => "scoring",
+        JobProgressStage::BuildingNetwork => "building network",
+        JobProgressStage::Finalizing => "finalizing",
+    }
 }
 
 fn main() {
@@ -197,8 +321,17 @@ fn run_search_job(label: &str, job: SearchJobConfig) -> Result<(), String> {
         taxonomy: None,
         query_key: job.output.query_key,
     };
-    let artifact =
-        run_search_request(request).map_err(|err| format!("{label}: search failed: {err}"))?;
+    let progress = CliProgress::new(format!("[search:{label}]"));
+    let artifact = run_search_request_with_progress(
+        request,
+        |stage, completed, total| progress.update(stage, completed, total),
+        || false,
+    )
+    .map_err(|err| {
+        progress.finish("failed");
+        format!("{label}: search failed: {err}")
+    })?;
+    progress.finish("done");
     let json = serde_json::to_string_pretty(&artifact)
         .map_err(|err| format!("{label}: failed to serialize JSON output: {err}"))?;
     save_json_to_path(&job.output_json, &json)
@@ -238,8 +371,17 @@ fn run_network_job(label: &str, job: NetworkJobConfig) -> Result<(), String> {
         parse: job.parse,
         build: job.build,
     };
-    let artifact = build_network_artifact(request)
-        .map_err(|err| format!("{label}: network build failed: {err}"))?;
+    let progress = CliProgress::new(format!("[network:{label}]"));
+    let artifact = build_network_artifact_with_progress(
+        request,
+        |stage, completed, total| progress.update(stage, completed, total),
+        || false,
+    )
+    .map_err(|err| {
+        progress.finish("failed");
+        format!("{label}: network build failed: {err}")
+    })?;
+    progress.finish("done");
     let json = serde_json::to_string_pretty(&artifact)
         .map_err(|err| format!("{label}: failed to serialize network JSON: {err}"))?;
     save_json_to_path(&job.output_json, &json)

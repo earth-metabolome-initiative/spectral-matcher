@@ -12,7 +12,7 @@ use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver};
 #[cfg(not(target_arch = "wasm32"))]
-use std::time::UNIX_EPOCH;
+use std::time::{Duration, UNIX_EPOCH};
 
 #[cfg(not(target_arch = "wasm32"))]
 use rayon::prelude::*;
@@ -27,8 +27,9 @@ use crate::api::{
 use crate::export::{SearchQueryKey, export_search_tsv};
 use crate::mgf::load_mgf_bytes;
 #[cfg(not(target_arch = "wasm32"))]
-use crate::mgf::load_mgf_path;
+use crate::mgf::{NativeLoadMessage, start_native_mgf_load};
 use crate::model::{CandidateHit, LoadedSpectra, SearchResult, SpectrumRecord};
+#[cfg(target_arch = "wasm32")]
 use crate::network::PairScore;
 #[cfg(target_arch = "wasm32")]
 use crate::network::build_network;
@@ -386,15 +387,15 @@ pub fn build_network_artifact_with_progress<F>(
 where
     F: Fn(JobProgressStage, u64, u64) + Send + Sync,
 {
-    on_progress(JobProgressStage::LoadingSpectra, 0, 1);
-    let loaded = load_request_spectra(
+    let loaded = load_request_spectra_with_progress(
+        JobProgressStage::LoadingSpectra,
         &request.source_label,
         request.mgf_text.as_deref(),
         request.mgf_path.as_deref(),
         request.parse.min_peaks,
         request.parse.max_peaks,
+        &on_progress,
     )?;
-    on_progress(JobProgressStage::LoadingSpectra, 1, 1);
 
     let spectra = preprocess_spectra_for_metric(loaded.spectra.clone(), request.build.compute)?;
     let scorer = MetricScorer::new(request.build.compute)?;
@@ -451,25 +452,25 @@ pub fn run_search_request_with_progress<F>(
 where
     F: Fn(JobProgressStage, u64, u64) + Send + Sync,
 {
-    on_progress(JobProgressStage::LoadingQuery, 0, 1);
-    let queries = load_request_spectra(
+    let queries = load_request_spectra_with_progress(
+        JobProgressStage::LoadingQuery,
         &request.query_source_label,
         request.query_mgf_text.as_deref(),
         request.query_mgf_path.as_deref(),
         request.parse.min_peaks,
         request.parse.max_peaks,
+        &on_progress,
     )?;
-    on_progress(JobProgressStage::LoadingQuery, 1, 1);
 
-    on_progress(JobProgressStage::LoadingLibrary, 0, 1);
-    let library = load_request_spectra(
+    let library = load_request_spectra_with_progress(
+        JobProgressStage::LoadingLibrary,
         &request.library_source_label,
         request.library_mgf_text.as_deref(),
         request.library_mgf_path.as_deref(),
         request.parse.min_peaks,
         request.parse.max_peaks,
+        &on_progress,
     )?;
-    on_progress(JobProgressStage::LoadingLibrary, 1, 1);
 
     let queries_processed =
         preprocess_spectra_for_metric(queries.spectra.clone(), request.search.compute)?;
@@ -545,6 +546,7 @@ where
     })
 }
 
+#[cfg(target_arch = "wasm32")]
 fn load_request_spectra(
     source_label: &str,
     mgf_text: Option<&str>,
@@ -552,16 +554,10 @@ fn load_request_spectra(
     min_peaks: usize,
     max_peaks: usize,
 ) -> Result<LoadedSpectra, String> {
-    #[cfg(not(target_arch = "wasm32"))]
-    if let Some(path) = mgf_path {
-        return load_mgf_path_cached(Path::new(path), min_peaks, max_peaks);
-    }
-
     if let Some(text) = mgf_text {
         return load_mgf_bytes(source_label, text.as_bytes(), min_peaks, max_peaks);
     }
 
-    #[cfg(target_arch = "wasm32")]
     if mgf_path.is_some() {
         return Err(
             "MGF path requests are unavailable on wasm; provide inline MGF text".to_string(),
@@ -572,14 +568,52 @@ fn load_request_spectra(
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn load_mgf_path_cached(
+fn load_request_spectra_with_progress<F>(
+    stage: JobProgressStage,
+    source_label: &str,
+    mgf_text: Option<&str>,
+    mgf_path: Option<&str>,
+    min_peaks: usize,
+    max_peaks: usize,
+    on_progress: &F,
+) -> Result<LoadedSpectra, String>
+where
+    F: Fn(JobProgressStage, u64, u64) + Sync,
+{
+    if let Some(path) = mgf_path {
+        return load_mgf_path_cached_with_progress(
+            Path::new(path),
+            min_peaks,
+            max_peaks,
+            |completed, total| on_progress(stage, completed, total),
+        );
+    }
+
+    if let Some(text) = mgf_text {
+        let total = text.len() as u64;
+        on_progress(stage, 0, total.max(1));
+        let loaded = load_mgf_bytes(source_label, text.as_bytes(), min_peaks, max_peaks)?;
+        on_progress(stage, total.max(1), total.max(1));
+        return Ok(loaded);
+    }
+
+    Err("request did not provide an MGF source".to_string())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn load_mgf_path_cached_with_progress<F>(
     path: &Path,
     min_peaks: usize,
     max_peaks: usize,
-) -> Result<LoadedSpectra, String> {
+    mut on_progress: F,
+) -> Result<LoadedSpectra, String>
+where
+    F: FnMut(u64, u64),
+{
     let canonical = std::fs::canonicalize(path)
         .map_err(|err| format!("cannot resolve {}: {err}", path.display()))?;
     let fingerprint = file_fingerprint(&canonical)?;
+    let total = fingerprint.len.max(1);
 
     if let Ok(cache) = mgf_cache().lock()
         && let Some(cached) = cache.get(&canonical)
@@ -587,22 +621,37 @@ fn load_mgf_path_cached(
         && cached.min_peaks == min_peaks
         && cached.max_peaks == max_peaks
     {
+        on_progress(total, total);
         return Ok(cached.loaded.clone());
     }
 
-    let loaded = load_mgf_path(&canonical, min_peaks, max_peaks)?;
-    if let Ok(mut cache) = mgf_cache().lock() {
-        cache.insert(
-            canonical,
-            CachedMgf {
-                fingerprint,
-                min_peaks,
-                max_peaks,
-                loaded: loaded.clone(),
-            },
-        );
+    let handle = start_native_mgf_load(&canonical, min_peaks, max_peaks)?;
+    on_progress(0, total);
+    loop {
+        let processed = handle.processed_bytes().min(handle.total_bytes()).max(0);
+        on_progress(processed, total);
+        if let Some(message) = handle.try_recv() {
+            match message {
+                NativeLoadMessage::Finished(loaded) => {
+                    on_progress(total, total);
+                    if let Ok(mut cache) = mgf_cache().lock() {
+                        cache.insert(
+                            canonical,
+                            CachedMgf {
+                                fingerprint,
+                                min_peaks,
+                                max_peaks,
+                                loaded: loaded.clone(),
+                            },
+                        );
+                    }
+                    return Ok(loaded);
+                }
+                NativeLoadMessage::Failed(err) => return Err(err),
+            }
+        }
+        std::thread::sleep(Duration::from_millis(16));
     }
-    Ok(loaded)
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -841,6 +890,7 @@ impl IncrementalSearchState {
     }
 }
 
+#[cfg(target_arch = "wasm32")]
 fn search_candidates(
     queries: &[SpectrumRecord],
     library: &[SpectrumRecord],
@@ -951,6 +1001,7 @@ fn score_query_library_pairs(
     Ok(Some(finalize_search_candidates(candidates, params.top_n)))
 }
 
+#[cfg(target_arch = "wasm32")]
 fn score_all_pairs(
     spectra: &[SpectrumRecord],
     scorer: &MetricScorer,
@@ -1112,55 +1163,6 @@ fn ranked_heap_to_selected_neighbors(
             matches: neighbor.matches,
         })
         .collect()
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn score_all_pairs_parallel(
-    spectra: &[SpectrumRecord],
-    scorer: &MetricScorer,
-    done_worker: Option<Arc<AtomicUsize>>,
-) -> Result<Vec<PairScore>, String> {
-    let pair_indices: Vec<(usize, usize)> = (0..spectra.len())
-        .flat_map(|i| (i..spectra.len()).map(move |j| (i, j)))
-        .collect();
-
-    let error = Arc::new(Mutex::new(None::<String>));
-    let error_worker = Arc::clone(&error);
-
-    let pairs: Vec<PairScore> = pair_indices
-        .into_par_iter()
-        .filter_map(|(left_index, right_index)| {
-            if let Some(done) = &done_worker {
-                done.fetch_add(1, Ordering::Relaxed);
-            }
-            let left = spectra[left_index].spectrum.as_ref();
-            let right = spectra[right_index].spectrum.as_ref();
-            match scorer.similarity(left, right, left_index, right_index) {
-                Ok((score, matches)) => Some(PairScore {
-                    left: left_index,
-                    right: right_index,
-                    score,
-                    matches,
-                }),
-                Err(err) => {
-                    if let Ok(mut slot) = error_worker.lock()
-                        && slot.is_none()
-                    {
-                        *slot = Some(err);
-                    }
-                    None
-                }
-            }
-        })
-        .collect();
-
-    if let Ok(mut slot) = error.lock()
-        && let Some(err) = slot.take()
-    {
-        return Err(err);
-    }
-
-    Ok(pairs)
 }
 
 fn search_match_passes(score: f64, matches: usize, params: &LibrarySearchParams) -> bool {
