@@ -11,11 +11,11 @@ max_peaks = 1000
 
 [jobs.search]
 metric = "CosineGreedy"
-tolerance = 0.2
-mz_power = 0.0
-intensity_power = 1.0
 precursor_mz_tolerance = 0.01
-min_matched_peaks = 3
+fragment_mz_tolerance = 0.01
+mz_power = 2
+intensity_power = 1.5
+min_matched_peaks = 6
 min_similarity_threshold = 0.7
 top_n = 20
 

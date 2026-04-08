@@ -15,6 +15,7 @@ use serde::Deserialize;
 #[cfg(not(target_arch = "wasm32"))]
 use spectral_matcher::{
     JobProgressStage, NetworkBuildParams, ParseConfig, SearchQueryKey, SearchRequest,
+    SimilarityMetric,
     build_network_artifact_with_progress, run_search_request_with_progress, save_json_to_path,
     save_tsv_to_path, serve,
 };
@@ -44,7 +45,7 @@ struct SearchJobConfig {
 #[derive(Deserialize)]
 struct SearchConfig {
     metric: spectral_matcher::SimilarityMetric,
-    tolerance: f64,
+    fragment_mz_tolerance: f64,
     mz_power: f64,
     intensity_power: f64,
     precursor_mz_tolerance: f64,
@@ -217,7 +218,7 @@ where
 {
     let _exe = args.next();
     let Some(command) = args.next() else {
-        return Err("usage: spectral-matcher <serve|search|network> ...".to_string());
+        return Err("usage: spectral-matcher <serve|search|network|metrics> ...".to_string());
     };
     match command.as_str() {
         "serve" => {
@@ -232,8 +233,30 @@ where
             let path = parse_config_arg(args)?;
             run_network_config(Path::new(&path))
         }
+        "metrics" => {
+            if args.next().is_some() {
+                return Err("unexpected extra arguments".to_string());
+            }
+            print_metrics();
+            Ok(())
+        }
         other => Err(format!("unsupported command '{other}'")),
     }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn print_metrics() {
+    println!("Available similarity metrics:");
+    for metric in SimilarityMetric::ALL {
+        let suffix = if metric == SimilarityMetric::default() {
+            " (default)"
+        } else {
+            ""
+        };
+        println!("- {}{}: {}", metric.label(), suffix, metric.description());
+    }
+    println!();
+    println!("Use one of these values in `[jobs.search].metric` or `[jobs.build.compute].metric`.");
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -308,7 +331,7 @@ fn run_search_job(label: &str, job: SearchJobConfig) -> Result<(), String> {
         search: spectral_matcher::LibrarySearchParams {
             compute: spectral_matcher::ComputeParams {
                 metric: job.search.metric,
-                tolerance: job.search.tolerance,
+                fragment_mz_tolerance: job.search.fragment_mz_tolerance,
                 mz_power: job.search.mz_power,
                 intensity_power: job.search.intensity_power,
                 top_n_peaks: None,

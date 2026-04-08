@@ -23,9 +23,18 @@ The CLI supports three commands:
 cargo run -- serve
 cargo run -- network --config path/to/network.toml
 cargo run -- search --config path/to/search.toml
+cargo run -- metrics
 ```
 
 Important: the `network` and `search` commands are config-file driven. They do not accept MGF paths directly on the command line.
+
+To see the currently supported similarity metrics and their meanings:
+
+```bash
+cargo run -- metrics
+```
+
+This prints the valid `metric = "..."` values for both network and search configs.
 
 ## Run The Local Matcher Service
 
@@ -54,7 +63,7 @@ max_peaks = 1000
 
 [jobs.build.compute]
 metric = "CosineGreedy"
-tolerance = 0.2
+fragment_mz_tolerance = 0.2
 mz_power = 0.0
 intensity_power = 1.0
 
@@ -81,6 +90,17 @@ Notes:
 - `top_k` is the maximum number of retained neighbors per node.
 - The CLI can appear quiet while computing; for larger jobs that is expected.
 
+## Available Metrics
+
+- `CosineHungarian`: exact cosine matching with Hungarian assignment; slower, more exhaustive.
+- `CosineGreedy`: fast cosine matching with greedy assignment; default choice for most runs.
+- `ModifiedCosine`: precursor-shift-aware cosine using Hungarian assignment for analog-style matching.
+- `ModifiedGreedyCosine`: faster precursor-shift-aware cosine using greedy assignment.
+- `LinearEntropyWeighted`: spectral entropy similarity with intensity weighting after entropy preprocessing.
+- `LinearEntropyUnweighted`: spectral entropy similarity without intensity weighting after entropy preprocessing.
+- `ModifiedLinearEntropyWeighted`: precursor-shift-aware spectral entropy similarity with intensity weighting.
+- `ModifiedLinearEntropyUnweighted`: precursor-shift-aware spectral entropy similarity without intensity weighting.
+
 ## Run Spectral Matching Against An External Library
 
 For your current setup, use:
@@ -104,10 +124,10 @@ max_peaks = 1000
 
 [jobs.search]
 metric = "CosineGreedy"
-tolerance = 0.2
+precursor_mz_tolerance = 0.05
+fragment_mz_tolerance = 0.2
 mz_power = 0.0
 intensity_power = 1.0
-precursor_mz_tolerance = 0.05
 min_matched_peaks = 3
 min_similarity_threshold = 0.7
 top_n = 20
@@ -135,7 +155,7 @@ The TSV uses a compact query identity schema:
 
 Parameter guidance:
 
-- Start with `tolerance = 0.2` unless you have a reason to tighten or relax fragment matching.
+- Start with `fragment_mz_tolerance = 0.2` unless you have a reason to tighten or relax fragment matching.
 - `precursor_mz_tolerance = 0.05` is a reasonable first pass for precursor filtering.
 - `min_matched_peaks = 3` avoids many weak accidental hits.
 - `min_similarity_threshold = 0.7` is fairly strict. If you get too few hits, try `0.6` or `0.5`.

@@ -24,6 +24,20 @@ fn sample_mgf(name: &str) -> String {
 }
 
 #[test]
+fn metrics_cli_lists_available_metrics() {
+    let output = Command::new(env!("CARGO_BIN_EXE_spectral-matcher"))
+        .arg("metrics")
+        .output()
+        .expect("run metrics cli");
+    assert!(output.status.success(), "{output:?}");
+    let stdout = String::from_utf8(output.stdout).expect("utf8 stdout");
+    assert!(stdout.contains("Available similarity metrics:"));
+    assert!(stdout.contains("CosineGreedy (default)"));
+    assert!(stdout.contains("ModifiedCosine"));
+    assert!(stdout.contains("LinearEntropyWeighted"));
+}
+
+#[test]
 fn search_cli_writes_json_and_optional_tsv() {
     let dir = temp_dir("search_json_tsv");
     let query = dir.join("query.mgf");
@@ -50,10 +64,10 @@ max_peaks = 1000
 
 [jobs.search]
 metric = "CosineGreedy"
-tolerance = 0.2
+precursor_mz_tolerance = 1.0
+fragment_mz_tolerance = 0.2
 mz_power = 0.0
 intensity_power = 1.0
-precursor_mz_tolerance = 1.0
 min_matched_peaks = 1
 min_similarity_threshold = 0.0
 top_n = 1
@@ -107,10 +121,10 @@ max_peaks = 1000
 
 [jobs.search]
 metric = "CosineGreedy"
-tolerance = 0.2
+precursor_mz_tolerance = 1.0
+fragment_mz_tolerance = 0.2
 mz_power = 0.0
 intensity_power = 1.0
-precursor_mz_tolerance = 1.0
 min_matched_peaks = 1
 min_similarity_threshold = 0.0
 top_n = 1
@@ -127,10 +141,10 @@ max_peaks = 1000
 
 [jobs.search]
 metric = "CosineGreedy"
-tolerance = 0.2
+precursor_mz_tolerance = 1.0
+fragment_mz_tolerance = 0.2
 mz_power = 0.0
 intensity_power = 1.0
-precursor_mz_tolerance = 1.0
 min_matched_peaks = 1
 min_similarity_threshold = 0.0
 top_n = 1
@@ -186,7 +200,7 @@ max_peaks = 1000
 
 [jobs.build.compute]
 metric = "CosineGreedy"
-tolerance = 0.2
+fragment_mz_tolerance = 0.2
 mz_power = 0.0
 intensity_power = 1.0
 

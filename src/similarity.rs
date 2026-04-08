@@ -48,6 +48,35 @@ impl SimilarityMetric {
         }
     }
 
+    pub fn description(self) -> &'static str {
+        match self {
+            Self::CosineHungarian => {
+                "Exact cosine matching with Hungarian assignment; slower, more exhaustive."
+            }
+            Self::CosineGreedy => {
+                "Fast cosine matching with greedy assignment; default choice for most runs."
+            }
+            Self::ModifiedCosine => {
+                "Precursor-shift-aware cosine using Hungarian assignment for analog-style matching."
+            }
+            Self::ModifiedGreedyCosine => {
+                "Faster precursor-shift-aware cosine using greedy assignment."
+            }
+            Self::LinearEntropyWeighted => {
+                "Spectral entropy similarity with intensity weighting after entropy preprocessing."
+            }
+            Self::LinearEntropyUnweighted => {
+                "Spectral entropy similarity without intensity weighting after entropy preprocessing."
+            }
+            Self::ModifiedLinearEntropyWeighted => {
+                "Precursor-shift-aware spectral entropy similarity with intensity weighting."
+            }
+            Self::ModifiedLinearEntropyUnweighted => {
+                "Precursor-shift-aware spectral entropy similarity without intensity weighting."
+            }
+        }
+    }
+
     fn needs_linear_entropy_preprocessing(self) -> bool {
         matches!(
             self,
@@ -62,7 +91,7 @@ impl SimilarityMetric {
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 pub struct ComputeParams {
     pub metric: SimilarityMetric,
-    pub tolerance: f64,
+    pub fragment_mz_tolerance: f64,
     pub mz_power: f64,
     pub intensity_power: f64,
     #[serde(default)]
@@ -95,13 +124,25 @@ impl MetricScorer {
     pub fn new(params: ComputeParams) -> Result<Self, String> {
         let inner = match params.metric {
             SimilarityMetric::CosineHungarian => {
-                HungarianCosine::new(params.mz_power, params.intensity_power, params.tolerance)
-                    .map(MetricScorerInner::CosineHungarian)
+                HungarianCosine::new(
+                    params.mz_power,
+                    params.intensity_power,
+                    params.fragment_mz_tolerance,
+                )
+                .map(MetricScorerInner::CosineHungarian)
             }
             SimilarityMetric::CosineGreedy => {
                 match (
-                    LinearCosine::new(params.mz_power, params.intensity_power, params.tolerance),
-                    HungarianCosine::new(params.mz_power, params.intensity_power, params.tolerance),
+                    LinearCosine::new(
+                        params.mz_power,
+                        params.intensity_power,
+                        params.fragment_mz_tolerance,
+                    ),
+                    HungarianCosine::new(
+                        params.mz_power,
+                        params.intensity_power,
+                        params.fragment_mz_tolerance,
+                    ),
                 ) {
                     (Ok(linear), Ok(fallback)) => {
                         Ok(MetricScorerInner::CosineGreedy { linear, fallback })
@@ -112,7 +153,7 @@ impl MetricScorer {
             SimilarityMetric::ModifiedCosine => ModifiedHungarianCosine::new(
                 params.mz_power,
                 params.intensity_power,
-                params.tolerance,
+                params.fragment_mz_tolerance,
             )
             .map(MetricScorerInner::ModifiedCosine),
             SimilarityMetric::ModifiedGreedyCosine => {
@@ -120,12 +161,12 @@ impl MetricScorer {
                     ModifiedLinearCosine::new(
                         params.mz_power,
                         params.intensity_power,
-                        params.tolerance,
+                        params.fragment_mz_tolerance,
                     ),
                     ModifiedHungarianCosine::new(
                         params.mz_power,
                         params.intensity_power,
-                        params.tolerance,
+                        params.fragment_mz_tolerance,
                     ),
                 ) {
                     (Ok(linear), Ok(fallback)) => {
@@ -137,28 +178,28 @@ impl MetricScorer {
             SimilarityMetric::LinearEntropyWeighted => LinearEntropy::new(
                 params.mz_power,
                 params.intensity_power,
-                params.tolerance,
+                params.fragment_mz_tolerance,
                 true,
             )
             .map(MetricScorerInner::LinearEntropyWeighted),
             SimilarityMetric::LinearEntropyUnweighted => LinearEntropy::new(
                 params.mz_power,
                 params.intensity_power,
-                params.tolerance,
+                params.fragment_mz_tolerance,
                 false,
             )
             .map(MetricScorerInner::LinearEntropyUnweighted),
             SimilarityMetric::ModifiedLinearEntropyWeighted => ModifiedLinearEntropy::new(
                 params.mz_power,
                 params.intensity_power,
-                params.tolerance,
+                params.fragment_mz_tolerance,
                 true,
             )
             .map(MetricScorerInner::ModifiedLinearEntropyWeighted),
             SimilarityMetric::ModifiedLinearEntropyUnweighted => ModifiedLinearEntropy::new(
                 params.mz_power,
                 params.intensity_power,
-                params.tolerance,
+                params.fragment_mz_tolerance,
                 false,
             )
             .map(MetricScorerInner::ModifiedLinearEntropyUnweighted),
@@ -238,7 +279,7 @@ pub fn preprocess_spectra_for_metric<T>(
     let cleaner = MsEntropyCleanSpectrum::builder()
         .build()
         .map_err(|err| format!("failed to configure ms_entropy cleaner: {err:?}"))?;
-    let merger = SiriusMergeClosePeaks::new(params.tolerance)
+    let merger = SiriusMergeClosePeaks::new(params.fragment_mz_tolerance)
         .map_err(|err| format!("failed to configure close-peak merger: {err:?}"))?;
 
     Ok(spectra
@@ -343,7 +384,7 @@ mod tests {
             spectra,
             ComputeParams {
                 metric: SimilarityMetric::CosineGreedy,
-                tolerance: 0.2,
+                fragment_mz_tolerance: 0.2,
                 mz_power: 0.0,
                 intensity_power: 1.0,
                 top_n_peaks: Some(2),
@@ -353,7 +394,7 @@ mod tests {
         let reference = record(1, &[(10.0, 1.0), (30.0, 0.8)]);
         let scorer = MetricScorer::new(ComputeParams {
             metric: SimilarityMetric::CosineGreedy,
-            tolerance: 0.2,
+            fragment_mz_tolerance: 0.2,
             mz_power: 0.0,
             intensity_power: 1.0,
             top_n_peaks: None,
@@ -379,7 +420,7 @@ mod tests {
         let right = record(1, &[(10.0, 1.0), (10.15, 0.5)]);
         let scorer = MetricScorer::new(ComputeParams {
             metric: SimilarityMetric::CosineGreedy,
-            tolerance: 0.1,
+            fragment_mz_tolerance: 0.1,
             mz_power: 0.0,
             intensity_power: 1.0,
             top_n_peaks: None,
@@ -400,7 +441,7 @@ mod tests {
         let right = record(1, &[(10.0, 1.0), (10.15, 0.5)]);
         let scorer = MetricScorer::new(ComputeParams {
             metric: SimilarityMetric::ModifiedGreedyCosine,
-            tolerance: 0.1,
+            fragment_mz_tolerance: 0.1,
             mz_power: 0.0,
             intensity_power: 1.0,
             top_n_peaks: None,

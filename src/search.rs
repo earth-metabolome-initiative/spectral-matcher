@@ -1423,7 +1423,7 @@ mod tests {
     fn base_compute_params(metric: SimilarityMetric) -> ComputeParams {
         ComputeParams {
             metric,
-            tolerance: 0.2,
+            fragment_mz_tolerance: 0.2,
             mz_power: 0.0,
             intensity_power: 1.0,
             top_n_peaks: None,

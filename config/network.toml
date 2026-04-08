@@ -10,7 +10,7 @@ max_peaks = 1000
 
 [jobs.build.compute]
 metric = "CosineGreedy"
-tolerance = 0.2
+fragment_mz_tolerance = 0.2
 mz_power = 0.0
 intensity_power = 1.0
 
