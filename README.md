@@ -107,7 +107,7 @@ metric = "CosineGreedy"
 tolerance = 0.2
 mz_power = 0.0
 intensity_power = 1.0
-parent_mass_tolerance = 0.05
+precursor_mz_tolerance = 0.05
 min_matched_peaks = 3
 min_similarity_threshold = 0.7
 top_n = 20
@@ -136,7 +136,7 @@ The TSV uses a compact query identity schema:
 Parameter guidance:
 
 - Start with `tolerance = 0.2` unless you have a reason to tighten or relax fragment matching.
-- `parent_mass_tolerance = 0.05` is a reasonable first pass for precursor filtering.
+- `precursor_mz_tolerance = 0.05` is a reasonable first pass for precursor filtering.
 - `min_matched_peaks = 3` avoids many weak accidental hits.
 - `min_similarity_threshold = 0.7` is fairly strict. If you get too few hits, try `0.6` or `0.5`.
 - `top_n = 20` keeps the best 20 matches per query spectrum.

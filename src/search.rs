@@ -40,7 +40,7 @@ use crate::taxonomy::{LotusMetadataIndex, ResolvedLotusQuery, short_inchikey_fro
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct LibrarySearchParams {
     pub compute: ComputeParams,
-    pub parent_mass_tolerance: f64,
+    pub precursor_mz_tolerance: f64,
     pub min_matched_peaks: usize,
     pub min_similarity_threshold: f64,
     pub top_n: usize,
@@ -790,7 +790,7 @@ impl IncrementalSearchState {
                 return Ok(IncrementalSearchStep::Cancelled);
             }
 
-            if search_parent_mass_passes(
+            if search_precursor_mz_passes(
                 &self.queries[self.query_index],
                 &self.library[self.library_index],
                 &self.params,
@@ -850,7 +850,7 @@ fn search_candidates(
     let mut candidates = Vec::new();
     for query_idx in 0..queries.len() {
         for library_idx in 0..library.len() {
-            if !search_parent_mass_passes(&queries[query_idx], &library[library_idx], params) {
+            if !search_precursor_mz_passes(&queries[query_idx], &library[library_idx], params) {
                 continue;
             }
             let left = queries[query_idx].spectrum.as_ref();
@@ -907,7 +907,7 @@ fn score_query_library_pairs(
             if completed % report_every == 0 || completed == total {
                 on_progress(JobProgressStage::Scoring, completed as u64, total as u64);
             }
-            if !search_parent_mass_passes(&queries[query_idx], &library[library_idx], params) {
+            if !search_precursor_mz_passes(&queries[query_idx], &library[library_idx], params) {
                 return None;
             }
             let left = queries[query_idx].spectrum.as_ref();
@@ -1167,12 +1167,12 @@ fn search_match_passes(score: f64, matches: usize, params: &LibrarySearchParams)
     matches >= params.min_matched_peaks && score >= params.min_similarity_threshold
 }
 
-fn search_parent_mass_passes(
+fn search_precursor_mz_passes(
     query: &SpectrumRecord,
     library: &SpectrumRecord,
     params: &LibrarySearchParams,
 ) -> bool {
-    (query.meta.precursor_mz - library.meta.precursor_mz).abs() <= params.parent_mass_tolerance
+    (query.meta.precursor_mz - library.meta.precursor_mz).abs() <= params.precursor_mz_tolerance
 }
 
 fn finalize_search_candidates(candidates: Vec<SearchCandidate>, top_n: usize) -> Vec<CandidateHit> {
@@ -1444,7 +1444,7 @@ mod tests {
             library,
             LibrarySearchParams {
                 compute: base_compute_params(SimilarityMetric::CosineGreedy),
-                parent_mass_tolerance: 5.0,
+                precursor_mz_tolerance: 5.0,
                 min_matched_peaks: 2,
                 min_similarity_threshold: 0.1,
                 top_n: 1,
@@ -1496,7 +1496,7 @@ mod tests {
             },
             search: LibrarySearchParams {
                 compute: base_compute_params(SimilarityMetric::CosineGreedy),
-                parent_mass_tolerance: 0.1,
+                precursor_mz_tolerance: 0.1,
                 min_matched_peaks: 1,
                 min_similarity_threshold: 0.0,
                 top_n: 1,
@@ -1561,7 +1561,7 @@ mod tests {
             },
             search: LibrarySearchParams {
                 compute: base_compute_params(SimilarityMetric::CosineGreedy),
-                parent_mass_tolerance: 0.1,
+                precursor_mz_tolerance: 0.1,
                 min_matched_peaks: 1,
                 min_similarity_threshold: 0.0,
                 top_n: 1,
@@ -1655,7 +1655,7 @@ mod tests {
     }
 
     #[test]
-    fn search_respects_parent_mass_tolerance() {
+    fn search_respects_precursor_mz_tolerance() {
         let queries = vec![spectrum(0, 100.0, &[(10.0, 1.0), (20.0, 0.8), (30.0, 0.5)])];
         let library = vec![
             spectrum(10, 100.03, &[(10.0, 1.0), (20.0, 0.8), (30.0, 0.5)]),
@@ -1666,7 +1666,7 @@ mod tests {
             library,
             LibrarySearchParams {
                 compute: base_compute_params(SimilarityMetric::CosineGreedy),
-                parent_mass_tolerance: 0.05,
+                precursor_mz_tolerance: 0.05,
                 min_matched_peaks: 2,
                 min_similarity_threshold: 0.1,
                 top_n: 5,
@@ -1688,7 +1688,7 @@ mod tests {
         ];
         let params = LibrarySearchParams {
             compute: base_compute_params(SimilarityMetric::CosineGreedy),
-            parent_mass_tolerance: 5.0,
+            precursor_mz_tolerance: 5.0,
             min_matched_peaks: 2,
             min_similarity_threshold: 0.1,
             top_n: 2,

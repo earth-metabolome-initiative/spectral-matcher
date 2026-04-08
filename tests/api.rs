@@ -140,7 +140,7 @@ fn async_search_job_endpoints_work() {
                 intensity_power: 1.0,
                 top_n_peaks: None,
             },
-            parent_mass_tolerance: 1.0,
+            precursor_mz_tolerance: 1.0,
             min_matched_peaks: 1,
             min_similarity_threshold: 0.0,
             top_n: 1,
