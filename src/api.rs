@@ -118,6 +118,7 @@ pub struct SearchArtifactHit {
     pub query_index: usize,
     pub library_index: usize,
     pub rank: usize,
+    pub rank_before_taxonomy: Option<usize>,
     pub spectral_score: f64,
     pub ms1_deviation_ppm: f64,
     pub taxonomic_score: f64,
@@ -147,7 +148,9 @@ pub enum JobProgressStage {
     LoadingSpectra,
     LoadingQuery,
     LoadingLibrary,
+    LoadingTaxonomy,
     Scoring,
+    TaxonomicReranking,
     BuildingNetwork,
     Finalizing,
 }

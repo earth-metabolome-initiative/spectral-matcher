@@ -19,5 +19,10 @@ min_matched_peaks = 6
 min_similarity_threshold = 0.7
 top_n = 20
 
+[jobs.taxonomy]
+query = "Withania somnifera"
+lotus_csv = "/Users/pma/01_large_files/lotus/230106_frozen_metadata.csv"
+
 [jobs.output]
 query_key = "FeatureId"
+

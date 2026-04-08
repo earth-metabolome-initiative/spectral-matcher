@@ -171,6 +171,96 @@ top_n = 1
 }
 
 #[test]
+fn search_cli_applies_taxonomic_reranking_when_taxonomy_config_is_present() {
+    let dir = temp_dir("search_taxonomy");
+    let query = dir.join("query.mgf");
+    let library = dir.join("library.mgf");
+    let lotus = dir.join("lotus.csv");
+    let config = dir.join("config.toml");
+    let output_json = dir.join("out/result.json");
+    let output_tsv = dir.join("out/result.tsv");
+    write_file(
+        &query,
+        "BEGIN IONS\nNAME=q\nFEATURE_ID=1\nPEPMASS=100.0\n10 100\n20 80\n30 50\nEND IONS\n",
+    );
+    write_file(
+        &library,
+        concat!(
+            "BEGIN IONS\nNAME=withania\nPEPMASS=100.0\n",
+            "INCHIKEY=AAAAAAAAAAAAAA-111\n",
+            "10 100\n21 80\n35 30\nEND IONS\n",
+            "BEGIN IONS\nNAME=panax\nPEPMASS=100.0\n",
+            "INCHIKEY=BBBBBBBBBBBBBB-222\n",
+            "10 100\n20 80\n30 50\nEND IONS\n",
+        ),
+    );
+    write_file(
+        &lotus,
+        concat!(
+            "structure_inchikey,organism_wikidata,organism_name,organism_taxonomy_01domain,organism_taxonomy_02kingdom,organism_taxonomy_03phylum,organism_taxonomy_04class,organism_taxonomy_05order,organism_taxonomy_06family,organism_taxonomy_07tribe,organism_taxonomy_08genus,organism_taxonomy_09species,organism_taxonomy_10varietas\n",
+            "\"AAAAAAAAAAAAAA-111\",http://www.wikidata.org/entity/Q1,\"Withania somnifera\",Eukaryota,Archaeplastida,Streptophyta,Magnoliopsida,Solanales,Solanaceae,NA,Withania,Withania somnifera,NA\n",
+            "\"BBBBBBBBBBBBBB-222\",http://www.wikidata.org/entity/Q2,\"Panax ginseng\",Eukaryota,Archaeplastida,Streptophyta,Magnoliopsida,Apiales,Araliaceae,NA,Panax,Panax ginseng,NA\n",
+        ),
+    );
+    write_file(
+        &config,
+        &format!(
+            r#"
+[[jobs]]
+name = "taxonomy"
+query_mgf = "{}"
+library_mgf = "{}"
+output_json = "{}"
+output_tsv = "{}"
+
+[jobs.parse]
+min_peaks = 1
+max_peaks = 1000
+
+[jobs.search]
+metric = "CosineGreedy"
+precursor_mz_tolerance = 0.1
+fragment_mz_tolerance = 0.2
+mz_power = 0.0
+intensity_power = 1.0
+min_matched_peaks = 1
+min_similarity_threshold = 0.0
+top_n = 1
+
+[jobs.taxonomy]
+query = "Withania somnifera"
+lotus_csv = "{}"
+"#,
+            query.display(),
+            library.display(),
+            output_json.display(),
+            output_tsv.display(),
+            lotus.display(),
+        ),
+    );
+
+    let output = Command::new(env!("CARGO_BIN_EXE_spectral-matcher"))
+        .arg("search")
+        .arg("--config")
+        .arg(&config)
+        .output()
+        .expect("run cli");
+    assert!(output.status.success(), "{output:?}");
+
+    let json = fs::read_to_string(output_json).expect("json output");
+    let parsed: serde_json::Value = serde_json::from_str(&json).expect("valid json");
+    assert_eq!(parsed["result"]["taxonomic_reranking_applied"], true);
+    assert_eq!(parsed["result"]["taxonomic_query"], "Withania somnifera");
+    assert_eq!(parsed["result"]["hits"][0]["library_index"], 0);
+    assert_eq!(parsed["result"]["hits"][0]["taxonomic_score"], 9.0);
+
+    let tsv = fs::read_to_string(output_tsv).expect("tsv output");
+    let header = tsv.lines().next().expect("tsv header");
+    assert!(header.contains("hit_taxonomic_score"));
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
 fn network_cli_writes_network_json_and_csvs() {
     let dir = temp_dir("network");
     let input = dir.join("query.mgf");

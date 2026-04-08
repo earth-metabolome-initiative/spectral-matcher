@@ -83,6 +83,7 @@ impl NativeSearchHandle {
 struct SearchCandidate {
     query_index: usize,
     library_index: usize,
+    rank_before_taxonomy: usize,
     spectral_score: f64,
     taxonomic_score: f64,
     combined_score: f64,
@@ -476,11 +477,14 @@ where
         preprocess_spectra_for_metric(queries.spectra.clone(), request.search.compute)?;
     let library_processed =
         preprocess_spectra_for_metric(library.spectra.clone(), request.search.compute)?;
-    let taxonomy = request
-        .taxonomy
-        .as_ref()
-        .map(load_search_taxonomy_config)
-        .transpose()?;
+    let taxonomy = if let Some(taxonomy_request) = request.taxonomy.as_ref() {
+        on_progress(JobProgressStage::LoadingTaxonomy, 0, 1);
+        let loaded = load_search_taxonomy_config(taxonomy_request)?;
+        on_progress(JobProgressStage::LoadingTaxonomy, 1, 1);
+        Some(loaded)
+    } else {
+        None
+    };
     let search_params =
         effective_search_params(&request.search, library_processed.len(), taxonomy.is_some());
     let scorer = MetricScorer::new(search_params.compute)?;
@@ -514,6 +518,9 @@ where
         library_count: library.spectra.len(),
         metric: request.search.compute.metric,
     };
+    if taxonomy.is_some() {
+        on_progress(JobProgressStage::TaxonomicReranking, 0, 1);
+    }
     let enriched = build_search_artifact_result(
         result,
         &queries.spectra,
@@ -521,6 +528,9 @@ where
         taxonomy.as_ref(),
         request.search.top_n,
     );
+    if taxonomy.is_some() {
+        on_progress(JobProgressStage::TaxonomicReranking, 1, 1);
+    }
     let tsv = export_search_tsv(&enriched, &queries.spectra, &library.spectra, query_key);
     on_progress(JobProgressStage::Finalizing, 1, 1);
     Ok(SearchArtifact {
@@ -853,6 +863,7 @@ impl IncrementalSearchState {
                     self.candidates.push(SearchCandidate {
                         query_index: self.query_index,
                         library_index: self.library_index,
+                        rank_before_taxonomy: 0,
                         spectral_score: score,
                         taxonomic_score: 0.0,
                         combined_score: score,
@@ -910,6 +921,7 @@ fn search_candidates(
                 candidates.push(SearchCandidate {
                     query_index: query_idx,
                     library_index: library_idx,
+                    rank_before_taxonomy: 0,
                     spectral_score: score,
                     taxonomic_score: 0.0,
                     combined_score: score,
@@ -967,6 +979,7 @@ fn score_query_library_pairs(
                     search_match_passes(score, matches, params).then_some(SearchCandidate {
                         query_index: query_idx,
                         library_index: library_idx,
+                        rank_before_taxonomy: 0,
                         spectral_score: score,
                         taxonomic_score: 0.0,
                         combined_score: score,
@@ -1250,6 +1263,7 @@ fn enrich_search_hits(
                     query_index: hit.query_index,
                     library_index: hit.library_index,
                     rank: hit.rank,
+                    rank_before_taxonomy: None,
                     spectral_score: hit.spectral_score,
                     ms1_deviation_ppm: ms1_deviation_ppm(
                         query.meta.precursor_mz,
@@ -1302,6 +1316,7 @@ fn build_search_candidate(
     SearchCandidate {
         query_index: hit.query_index,
         library_index: hit.library_index,
+        rank_before_taxonomy: hit.rank,
         spectral_score: hit.spectral_score,
         taxonomic_score,
         combined_score: hit.spectral_score + taxonomic_score,
@@ -1338,6 +1353,7 @@ fn finalize_search_artifact_candidates(
                 query_index,
                 library_index: hit.library_index,
                 rank: rank + 1,
+                rank_before_taxonomy: Some(hit.rank_before_taxonomy),
                 spectral_score: hit.spectral_score,
                 ms1_deviation_ppm: ms1_deviation_ppm(
                     query.meta.precursor_mz,
@@ -1590,6 +1606,8 @@ mod tests {
         assert_eq!(artifact.result.taxonomic_query.as_deref(), Some("Withania"));
         assert_eq!(artifact.result.hits.len(), 1);
         assert_eq!(artifact.result.hits[0].library_index, 0);
+        assert_eq!(artifact.result.hits[0].rank, 1);
+        assert_eq!(artifact.result.hits[0].rank_before_taxonomy, Some(2));
         assert_eq!(artifact.result.hits[0].taxonomic_score, 8.0);
         assert_eq!(
             artifact.result.hits[0].matched_shared_rank.as_deref(),
@@ -1605,6 +1623,7 @@ mod tests {
                     super::SearchCandidate {
                         query_index: 0,
                         library_index: 2,
+                        rank_before_taxonomy: 3,
                         spectral_score: 0.8,
                         taxonomic_score: 0.0,
                         combined_score: 0.8,
@@ -1617,6 +1636,7 @@ mod tests {
                     super::SearchCandidate {
                         query_index: 0,
                         library_index: 1,
+                        rank_before_taxonomy: 2,
                         spectral_score: 0.8,
                         taxonomic_score: 0.0,
                         combined_score: 0.8,
@@ -1629,6 +1649,7 @@ mod tests {
                     super::SearchCandidate {
                         query_index: 0,
                         library_index: 0,
+                        rank_before_taxonomy: 1,
                         spectral_score: 0.8,
                         taxonomic_score: 0.0,
                         combined_score: 0.8,

@@ -38,6 +38,8 @@ struct SearchJobConfig {
     parse: ParseConfig,
     search: SearchConfig,
     #[serde(default)]
+    taxonomy: Option<SearchTaxonomyConfig>,
+    #[serde(default)]
     output: SearchOutputConfig,
 }
 
@@ -58,6 +60,13 @@ struct SearchConfig {
 #[derive(Deserialize, Default)]
 struct SearchOutputConfig {
     query_key: Option<SearchQueryKey>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Deserialize)]
+struct SearchTaxonomyConfig {
+    query: String,
+    lotus_csv: PathBuf,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -189,7 +198,9 @@ fn progress_stage_label(stage: JobProgressStage) -> &'static str {
         JobProgressStage::LoadingSpectra => "loading spectra",
         JobProgressStage::LoadingQuery => "loading query",
         JobProgressStage::LoadingLibrary => "loading library",
+        JobProgressStage::LoadingTaxonomy => "loading taxonomy",
         JobProgressStage::Scoring => "scoring",
+        JobProgressStage::TaxonomicReranking => "taxonomic reranking",
         JobProgressStage::BuildingNetwork => "building network",
         JobProgressStage::Finalizing => "finalizing",
     }
@@ -341,7 +352,12 @@ fn run_search_job(label: &str, job: SearchJobConfig) -> Result<(), String> {
             min_similarity_threshold: job.search.min_similarity_threshold,
             top_n: job.search.top_n,
         },
-        taxonomy: None,
+        taxonomy: job.taxonomy.map(|taxonomy| spectral_matcher::SearchTaxonomyRequest {
+            query_text: taxonomy.query,
+            lotus_source_label: taxonomy.lotus_csv.display().to_string(),
+            lotus_csv_text: None,
+            lotus_csv_path: Some(taxonomy.lotus_csv.display().to_string()),
+        }),
         query_key: job.output.query_key,
     };
     let progress = CliProgress::new(format!("[search:{label}]"));

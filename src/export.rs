@@ -58,6 +58,7 @@ pub fn export_search_tsv<TQ, TL>(
     library: &[SpectrumRecord<TL>],
     query_key: SearchQueryKey,
 ) -> String {
+    let include_taxonomy = result.taxonomic_reranking_applied;
     let dynamic_headers: BTreeSet<String> = result
         .hits
         .iter()
@@ -70,17 +71,33 @@ pub fn export_search_tsv<TQ, TL>(
         "query_key_mode".to_string(),
         "hit_rank".to_string(),
         "hit_spectral_score".to_string(),
-        "hit_taxonomic_score".to_string(),
-        "hit_combined_score".to_string(),
         "hit_matches".to_string(),
-        "hit_taxonomic_shared_rank".to_string(),
-        "hit_taxonomic_organism_name".to_string(),
-        "hit_taxonomic_organism_wikidata".to_string(),
-        "hit_taxonomic_short_inchikey".to_string(),
         "hit_precursor_mz".to_string(),
         "hit_ms1_deviation_ppm".to_string(),
         "hit_raw_name".to_string(),
     ];
+    if include_taxonomy {
+        header.splice(
+            3..3,
+            ["hit_rank_before_taxonomy".to_string()],
+        );
+        header.splice(
+            5..5,
+            [
+                "hit_taxonomic_score".to_string(),
+                "hit_combined_score".to_string(),
+            ],
+        );
+        header.splice(
+            7..7,
+            [
+                "hit_taxonomic_shared_rank".to_string(),
+                "hit_taxonomic_organism_name".to_string(),
+                "hit_taxonomic_organism_wikidata".to_string(),
+                "hit_taxonomic_short_inchikey".to_string(),
+            ],
+        );
+    }
     header.extend(dynamic_headers.iter().map(|key| format!("hit_{key}")));
 
     let mut out = String::new();
@@ -99,17 +116,33 @@ pub fn export_search_tsv<TQ, TL>(
             query_key.label().to_string(),
             hit.rank.to_string(),
             format!("{:.8}", hit.spectral_score),
-            format!("{:.8}", hit.taxonomic_score),
-            format!("{:.8}", hit.combined_score),
             hit.matches.to_string(),
-            hit.matched_shared_rank.clone().unwrap_or_default(),
-            hit.matched_organism_name.clone().unwrap_or_default(),
-            hit.matched_organism_wikidata.clone().unwrap_or_default(),
-            hit.matched_short_inchikey.clone().unwrap_or_default(),
             format!("{:.6}", hit_record.meta.precursor_mz),
             format!("{:.4}", hit.ms1_deviation_ppm),
             hit_record.meta.raw_name.clone(),
         ];
+        if include_taxonomy {
+            row.splice(
+                3..3,
+                [hit.rank_before_taxonomy.unwrap_or(hit.rank).to_string()],
+            );
+            row.splice(
+                5..5,
+                [
+                    format!("{:.8}", hit.taxonomic_score),
+                    format!("{:.8}", hit.combined_score),
+                ],
+            );
+            row.splice(
+                7..7,
+                [
+                    hit.matched_shared_rank.clone().unwrap_or_default(),
+                    hit.matched_organism_name.clone().unwrap_or_default(),
+                    hit.matched_organism_wikidata.clone().unwrap_or_default(),
+                    hit.matched_short_inchikey.clone().unwrap_or_default(),
+                ],
+            );
+        }
         row.extend(dynamic_headers.iter().map(|key| {
             hit_record
                 .meta
@@ -145,6 +178,7 @@ struct JsonSearchRow {
     query_label: String,
     query_raw_name: String,
     hit_rank: usize,
+    hit_rank_before_taxonomy: Option<usize>,
     hit_spectral_score: f64,
     hit_taxonomic_score: f64,
     hit_combined_score: f64,
@@ -180,6 +214,7 @@ pub fn export_search_json<TQ, TL>(
                 query_label: query.meta.label.clone(),
                 query_raw_name: query.meta.raw_name.clone(),
                 hit_rank: hit.rank,
+                hit_rank_before_taxonomy: hit.rank_before_taxonomy,
                 hit_spectral_score: hit.spectral_score,
                 hit_taxonomic_score: hit.taxonomic_score,
                 hit_combined_score: hit.combined_score,
@@ -348,6 +383,7 @@ mod tests {
                     query_index: 0,
                     library_index: 0,
                     rank: 1,
+                    rank_before_taxonomy: None,
                     spectral_score: 0.95,
                     ms1_deviation_ppm: 100_000.0,
                     taxonomic_score: 0.0,
@@ -362,6 +398,7 @@ mod tests {
                     query_index: 0,
                     library_index: 1,
                     rank: 2,
+                    rank_before_taxonomy: None,
                     spectral_score: 0.75,
                     ms1_deviation_ppm: 110_000.0,
                     taxonomic_score: 0.0,
@@ -383,6 +420,9 @@ mod tests {
         let tsv = export_search_tsv(&result, &queries, &library, SearchQueryKey::FeatureId);
         let mut lines = tsv.lines();
         let header = lines.next().expect("header");
+        assert!(!header.contains("hit_taxonomic_score"));
+        assert!(!header.contains("hit_combined_score"));
+        assert!(!header.contains("hit_taxonomic_shared_rank"));
         assert!(header.contains("hit_COMPOUND_NAME"));
         assert!(header.contains("hit_INCHIKEY"));
         assert!(header.contains("hit_SMILES"));
@@ -395,12 +435,54 @@ mod tests {
         assert_eq!(columns[1], "FEATURE_ID");
         assert_eq!(columns[2], "1");
         assert_eq!(columns[3], "0.95000000");
-        assert_eq!(columns[4], "0.00000000");
-        assert_eq!(columns[5], "0.95000000");
-        assert_eq!(columns[6], "6");
-        assert_eq!(columns[11], "110.000000");
-        assert_eq!(columns[12], "100000.0000");
-        assert_eq!(columns[13], "hit one");
+        assert_eq!(columns[4], "6");
+        assert_eq!(columns[5], "110.000000");
+        assert_eq!(columns[6], "100000.0000");
+        assert_eq!(columns[7], "hit one");
+    }
+
+    #[test]
+    fn search_tsv_includes_taxonomy_columns_when_reranking_is_applied() {
+        let queries = vec![spectrum_record(0, "query 0", &[])];
+        let library = vec![spectrum_record(10, "hit one", &[("INCHIKEY", "AAAA")])];
+        let result = SearchArtifactResult {
+            hits: vec![SearchArtifactHit {
+                query_index: 0,
+                library_index: 0,
+                rank: 1,
+                rank_before_taxonomy: Some(2),
+                spectral_score: 0.95,
+                ms1_deviation_ppm: 100_000.0,
+                taxonomic_score: 2.0,
+                combined_score: 2.95,
+                matches: 6,
+                matched_organism_name: Some("Plantus exampleus".to_string()),
+                matched_organism_wikidata: Some("Q123".to_string()),
+                matched_shared_rank: Some("genus".to_string()),
+                matched_short_inchikey: Some("AAAA".to_string()),
+            }],
+            query_count: 1,
+            library_count: 1,
+            metric: crate::similarity::SimilarityMetric::CosineGreedy,
+            taxonomic_reranking_applied: true,
+            taxonomic_query: Some("Example taxon".to_string()),
+        };
+
+        let tsv = export_search_tsv(&result, &queries, &library, SearchQueryKey::FeatureId);
+        let mut lines = tsv.lines();
+        let header = lines.next().expect("header");
+        assert!(header.contains("hit_taxonomic_score"));
+        assert!(header.contains("hit_combined_score"));
+        assert!(header.contains("hit_taxonomic_shared_rank"));
+        let first = lines.next().expect("first data row");
+        let columns: Vec<_> = first.split('\t').collect();
+        assert_eq!(columns[3], "2");
+        assert_eq!(columns[5], "2.00000000");
+        assert_eq!(columns[6], "2.95000000");
+        assert_eq!(columns[7], "genus");
+        assert_eq!(columns[8], "Plantus exampleus");
+        assert_eq!(columns[9], "Q123");
+        assert_eq!(columns[10], "AAAA");
     }
 
     #[test]
@@ -412,6 +494,7 @@ mod tests {
                 query_index: 0,
                 library_index: 0,
                 rank: 1,
+                rank_before_taxonomy: None,
                 spectral_score: 0.95,
                 ms1_deviation_ppm: 100_000.0,
                 taxonomic_score: 0.0,
@@ -435,5 +518,6 @@ mod tests {
         assert!(json.contains("\"hit_raw_name\": \"hit one\""));
         assert!(json.contains("\"hit_ms1_deviation_ppm\": 100000.0"));
         assert!(json.contains("\"INCHIKEY\": \"AAAA\""));
+        assert!(json.contains("\"hit_rank_before_taxonomy\": null"));
     }
 }
