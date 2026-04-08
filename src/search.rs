@@ -18,12 +18,12 @@ use std::time::UNIX_EPOCH;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
+#[cfg(not(target_arch = "wasm32"))]
+use crate::api::JobProgressStage;
 use crate::api::{
     NetworkArtifact, NetworkRequest, NetworkSpectrum, SearchArtifact, SearchArtifactHit,
     SearchArtifactResult, SearchRequest,
 };
-#[cfg(not(target_arch = "wasm32"))]
-use crate::api::JobProgressStage;
 use crate::export::{SearchQueryKey, export_search_tsv};
 use crate::mgf::load_mgf_bytes;
 #[cfg(not(target_arch = "wasm32"))]

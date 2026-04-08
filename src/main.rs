@@ -260,14 +260,19 @@ fn save_network_csvs(
     let nodes_path = dir.join("nodes.csv");
     let edges_path = dir.join("edges.csv");
 
-    let mut nodes_csv =
-        String::from("node_id,label,raw_name,precursor_mz,num_peaks,component_id,degree\n");
+    let exported_ids = artifact
+        .network
+        .nodes
+        .iter()
+        .map(exported_network_node_id)
+        .collect::<Vec<_>>();
+
+    let mut nodes_csv = String::from("node_id,precursor_mz,num_peaks,component_id,degree\n");
     for node in &artifact.network.nodes {
+        let node_id = &exported_ids[node.id];
         nodes_csv.push_str(&format!(
-            "{},{},{},{:.6},{},{},{}\n",
-            node.id,
-            escape_csv(&node.label),
-            escape_csv(&node.raw_name),
+            "{},{:.6},{},{},{}\n",
+            escape_csv(node_id),
             node.precursor_mz,
             node.num_peaks,
             node.component_id,
@@ -278,7 +283,10 @@ fn save_network_csvs(
     for edge in &artifact.network.edges {
         edges_csv.push_str(&format!(
             "{},{},{:.8},{}\n",
-            edge.source, edge.target, edge.score, edge.matches
+            escape_csv(&exported_ids[edge.source]),
+            escape_csv(&exported_ids[edge.target]),
+            edge.score,
+            edge.matches
         ));
     }
     std::fs::write(&nodes_path, nodes_csv)
@@ -286,6 +294,15 @@ fn save_network_csvs(
     std::fs::write(&edges_path, edges_csv)
         .map_err(|err| format!("failed to write {}: {err}", edges_path.display()))?;
     Ok(())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn exported_network_node_id(node: &spectral_matcher::NetworkNode) -> String {
+    node.feature_id
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| (node.id + 1).to_string())
 }
 
 #[cfg(not(target_arch = "wasm32"))]

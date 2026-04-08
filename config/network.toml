@@ -1,0 +1,19 @@
+[[jobs]]
+name = "mapp_batch_00231"
+input_mgf = "/Users/pma/git_repos/EMI/spectral-matcher/fixtures/mapp_batch_00231.mgf"
+output_json = "/Users/pma/git_repos/EMI/spectral-matcher/out/mapp_batch_00231/network.json"
+output_csv_dir = "/Users/pma/git_repos/EMI/spectral-matcher/out/mapp_batch_00231/csv"
+
+[jobs.parse]
+min_peaks = 5
+max_peaks = 1000
+
+[jobs.build.compute]
+metric = "CosineGreedy"
+tolerance = 0.2
+mz_power = 0.0
+intensity_power = 1.0
+
+[jobs.build]
+threshold = 0.7
+top_k = 10

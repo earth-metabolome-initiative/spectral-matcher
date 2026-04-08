@@ -166,8 +166,8 @@ fn network_cli_writes_network_json_and_csvs() {
     write_file(
         &input,
         concat!(
-            "BEGIN IONS\nNAME=a\nPEPMASS=100.0\n10 100\n20 80\n30 50\nEND IONS\n",
-            "BEGIN IONS\nNAME=b\nPEPMASS=100.1\n10 100\n20 80\n30 50\nEND IONS\n"
+            "BEGIN IONS\nNAME=a\nFEATURE_ID=1\nPEPMASS=100.0\n10 100\n20 80\n30 50\nEND IONS\n",
+            "BEGIN IONS\nNAME=b\nFEATURE_ID=2\nPEPMASS=100.1\n10 100\n20 80\n30 50\nEND IONS\n"
         ),
     );
     write_file(
@@ -210,5 +210,11 @@ top_k = 5
     assert!(output_json.exists());
     assert!(output_csv_dir.join("nodes.csv").exists());
     assert!(output_csv_dir.join("edges.csv").exists());
+    let nodes_csv = fs::read_to_string(output_csv_dir.join("nodes.csv")).expect("nodes csv");
+    let edges_csv = fs::read_to_string(output_csv_dir.join("edges.csv")).expect("edges csv");
+    assert!(nodes_csv.starts_with("node_id,precursor_mz,num_peaks,component_id,degree\n"));
+    assert!(nodes_csv.contains("1,100.000000,3,0,1\n"));
+    assert!(nodes_csv.contains("2,100.100000,3,0,1\n"));
+    assert!(edges_csv.contains("1,2,"));
     let _ = fs::remove_dir_all(dir);
 }
