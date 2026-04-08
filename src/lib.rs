@@ -1,4 +1,5 @@
 pub mod api;
+pub mod databases;
 pub mod export;
 pub mod mgf;
 pub mod model;
@@ -15,6 +16,9 @@ pub use api::{
     NetworkSpectrum, ParseConfig, SearchArtifact, SearchArtifactHit, SearchArtifactResult,
     SearchRequest, SearchTaxonomyRequest,
 };
+pub use databases::{SpectralDatabase, resolve_spectral_database, spectral_databases};
+#[cfg(not(target_arch = "wasm32"))]
+pub use databases::download_spectral_database;
 #[cfg(target_arch = "wasm32")]
 pub use export::download_tsv_file;
 pub use export::{SearchQueryKey, export_search_json, export_search_tsv};

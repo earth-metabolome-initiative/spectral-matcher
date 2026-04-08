@@ -13,9 +13,12 @@ use std::time::{Duration, Instant};
 use serde::Deserialize;
 
 #[cfg(not(target_arch = "wasm32"))]
+use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
+
+#[cfg(not(target_arch = "wasm32"))]
 use spectral_matcher::{
     JobProgressStage, NetworkBuildParams, ParseConfig, SearchQueryKey, SearchRequest,
-    SimilarityMetric,
+    SimilarityMetric, download_spectral_database, resolve_spectral_database, spectral_databases,
     build_network_artifact_with_progress, run_search_request_with_progress, save_json_to_path,
     save_tsv_to_path, serve,
 };
@@ -229,7 +232,7 @@ where
 {
     let _exe = args.next();
     let Some(command) = args.next() else {
-        return Err("usage: spectral-matcher <serve|search|network|metrics> ...".to_string());
+        return Err("usage: spectral-matcher <serve|search|network|metrics|db> ...".to_string());
     };
     match command.as_str() {
         "serve" => {
@@ -251,7 +254,152 @@ where
             print_metrics();
             Ok(())
         }
+        "db" => run_database_command(args),
         other => Err(format!("unsupported command '{other}'")),
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn run_database_command<I>(mut args: I) -> Result<(), String>
+where
+    I: Iterator<Item = String>,
+{
+    let Some(command) = args.next() else {
+        return Err("usage: spectral-matcher db <list|download> ...".to_string());
+    };
+    match command.as_str() {
+        "list" => {
+            if args.next().is_some() {
+                return Err("unexpected extra arguments".to_string());
+            }
+            print_database_list();
+            Ok(())
+        }
+        "download" => {
+            let Some(selection) = args.next() else {
+                return Err(
+                    "usage: spectral-matcher db download <database-id|all> [--output-dir <path>]"
+                        .to_string(),
+                );
+            };
+            let mut output_dir = PathBuf::from("databases");
+            while let Some(arg) = args.next() {
+                if arg == "--output-dir" {
+                    let Some(path) = args.next() else {
+                        return Err("missing path after --output-dir".to_string());
+                    };
+                    output_dir = PathBuf::from(path);
+                } else {
+                    return Err(format!("unsupported argument '{arg}'"));
+                }
+            }
+            download_database_selection(&selection, &output_dir)
+        }
+        other => Err(format!("unsupported db command '{other}'")),
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn print_database_list() {
+    println!("Available spectral databases:");
+    for database in spectral_databases() {
+        println!(
+            "- {}: {} | {} | {}",
+            database.id, database.name, database.category, database.dimensions
+        );
+        println!("  filename: {}", database.filename);
+        println!("  description: {}", database.description);
+        println!("  url: {}", database.url);
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn download_database_selection(selection: &str, output_dir: &Path) -> Result<(), String> {
+    let databases = if selection.eq_ignore_ascii_case("all") {
+        spectral_databases().to_vec()
+    } else {
+        vec![*resolve_spectral_database(selection).ok_or_else(|| {
+            format!(
+                "unknown database '{}'; run `spectral-matcher db list` to see valid ids",
+                selection
+            )
+        })?]
+    };
+
+    for database in databases {
+        let interactive = io::stderr().is_terminal();
+        let pb = build_download_progress_bar(&database.name);
+        let mut known_total = None;
+        let path = download_spectral_database(&database, output_dir, |downloaded, total| {
+            if total != known_total {
+                known_total = total;
+                if let Some(total) = total {
+                    pb.set_length(total);
+                    pb.set_style(download_bar_style());
+                } else {
+                    pb.set_style(download_spinner_style());
+                }
+            }
+            pb.set_position(downloaded);
+            if total.is_none() {
+                pb.set_message(format!("{} {}", database.name, human_bytes(downloaded)));
+            }
+        })?;
+        pb.finish_with_message(format!(
+            "{} downloaded to {}",
+            database.name,
+            path.display()
+        ));
+        if !interactive {
+            println!("{} -> {}", database.id, path.display());
+        }
+    }
+    Ok(())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn build_download_progress_bar(name: &str) -> ProgressBar {
+    let pb = ProgressBar::new_spinner();
+    pb.set_draw_target(if io::stderr().is_terminal() {
+        ProgressDrawTarget::stderr()
+    } else {
+        ProgressDrawTarget::hidden()
+    });
+    pb.enable_steady_tick(Duration::from_millis(100));
+    pb.set_style(download_spinner_style());
+    pb.set_message(name.to_string());
+    pb
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn download_spinner_style() -> ProgressStyle {
+    ProgressStyle::with_template("{spinner:.green} {msg}")
+        .expect("spinner template")
+        .tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏ ")
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn download_bar_style() -> ProgressStyle {
+    ProgressStyle::with_template(
+        "{spinner:.green} {msg} [{bar:40.cyan/blue}] {bytes}/{total_bytes} ({bytes_per_sec}, eta {eta})",
+    )
+    .expect("bar template")
+    .progress_chars("=> ")
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn human_bytes(bytes: u64) -> String {
+    const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
+    let mut value = bytes as f64;
+    let mut unit = 0usize;
+    while value >= 1024.0 && unit + 1 < UNITS.len() {
+        value /= 1024.0;
+        unit += 1;
+    }
+    if unit == 0 {
+        format!("{bytes} {}", UNITS[unit])
+    } else {
+        format!("{value:.1} {}", UNITS[unit])
     }
 }
 

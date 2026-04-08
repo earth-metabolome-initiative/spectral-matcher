@@ -17,13 +17,15 @@ cargo test
 
 ## CLI Overview
 
-The CLI supports three commands:
+The CLI supports these commands:
 
 ```bash
 cargo run -- serve
 cargo run -- network --config path/to/network.toml
 cargo run -- search --config path/to/search.toml
 cargo run -- metrics
+cargo run -- db list
+cargo run -- db download <database-id>
 ```
 
 Important: the `network` and `search` commands are config-file driven. They do not accept MGF paths directly on the command line.
@@ -35,6 +37,16 @@ cargo run -- metrics
 ```
 
 This prints the valid `metric = "..."` values for both network and search configs.
+
+To list and download curated spectral databases:
+
+```bash
+cargo run -- db list
+cargo run -- db download all_gnps_no_propogated
+cargo run -- db download isdb_lotus_pos_energysum --output-dir /path/to/databases
+```
+
+The downloader shows a colored progress bar for interactive terminals and writes the selected MGF into `databases/` by default.
 
 ## Run The Local Matcher Service
 
