@@ -32,10 +32,11 @@ pub use model::{
 pub use network::{ComponentSelection, NetworkEdge, NetworkNode, SpectralNetwork, build_network};
 pub use search::{
     IncrementalSearchState, IncrementalSearchStep, LibrarySearchParams, NativeSearchHandle,
-    SearchMessage, build_network_artifact, build_network_artifact_with_progress,
-    run_search_request, run_search_request_with_progress, search_library, start_native_search,
-    total_search_pairs,
+    SearchMessage, build_network_artifact, run_search_request, search_library,
+    start_native_search, total_search_pairs,
 };
+#[cfg(not(target_arch = "wasm32"))]
+pub use search::{build_network_artifact_with_progress, run_search_request_with_progress};
 #[cfg(not(target_arch = "wasm32"))]
 pub use server::serve;
 pub use similarity::{

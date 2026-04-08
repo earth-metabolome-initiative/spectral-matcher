@@ -19,15 +19,21 @@ use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::api::{
-    JobProgressStage, NetworkArtifact, NetworkRequest, NetworkSpectrum, SearchArtifact,
-    SearchArtifactHit, SearchArtifactResult, SearchRequest,
+    NetworkArtifact, NetworkRequest, NetworkSpectrum, SearchArtifact, SearchArtifactHit,
+    SearchArtifactResult, SearchRequest,
 };
+#[cfg(not(target_arch = "wasm32"))]
+use crate::api::JobProgressStage;
 use crate::export::{SearchQueryKey, export_search_tsv};
 use crate::mgf::load_mgf_bytes;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::mgf::load_mgf_path;
 use crate::model::{CandidateHit, LoadedSpectra, SearchResult, SpectrumRecord};
-use crate::network::{PairScore, SelectedNeighbor, build_network_from_selected_neighbors};
+use crate::network::PairScore;
+#[cfg(target_arch = "wasm32")]
+use crate::network::build_network;
+#[cfg(not(target_arch = "wasm32"))]
+use crate::network::{SelectedNeighbor, build_network_from_selected_neighbors};
 use crate::similarity::{ComputeParams, MetricScorer, preprocess_spectra_for_metric};
 use crate::taxonomy::{LotusMetadataIndex, ResolvedLotusQuery, short_inchikey_from_record};
 
@@ -168,10 +174,10 @@ fn load_search_taxonomy_config(
 ) -> Result<SearchTaxonomyConfig, String> {
     let lotus = if let Some(text) = request.lotus_csv_text.as_deref() {
         crate::taxonomy::load_lotus_bytes(text.as_bytes())?
-    } else if let Some(path) = request.lotus_csv_path.as_deref() {
+    } else if let Some(_path) = request.lotus_csv_path.as_deref() {
         #[cfg(not(target_arch = "wasm32"))]
         {
-            crate::taxonomy::load_lotus_path(std::path::Path::new(path))?
+            crate::taxonomy::load_lotus_path(std::path::Path::new(_path))?
         }
         #[cfg(target_arch = "wasm32")]
         {
