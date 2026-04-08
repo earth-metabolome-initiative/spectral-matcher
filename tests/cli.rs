@@ -77,7 +77,7 @@ top_n = 1
     let tsv = fs::read_to_string(output_tsv).expect("tsv output");
     let parsed: serde_json::Value = serde_json::from_str(&json).expect("valid json");
     assert_eq!(parsed["result"]["hits"].as_array().map(Vec::len), Some(1));
-    assert!(tsv.starts_with("query_export_key\tquery_node_id"));
+    assert!(tsv.starts_with("query_export_key\tquery_key_mode"));
     let _ = fs::remove_dir_all(dir);
 }
 

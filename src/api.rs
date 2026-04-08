@@ -119,6 +119,7 @@ pub struct SearchArtifactHit {
     pub library_index: usize,
     pub rank: usize,
     pub spectral_score: f64,
+    pub ms1_deviation_ppm: f64,
     pub taxonomic_score: f64,
     pub combined_score: f64,
     pub matches: usize,

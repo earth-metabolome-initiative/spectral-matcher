@@ -515,6 +515,7 @@ where
     };
     let enriched = build_search_artifact_result(
         result,
+        &queries.spectra,
         &library.spectra,
         taxonomy.as_ref(),
         request.search.top_n,
@@ -1208,11 +1209,12 @@ fn finalize_search_candidates(candidates: Vec<SearchCandidate>, top_n: usize) ->
 
 fn build_search_artifact_result(
     base: SearchResult,
+    queries: &[SpectrumRecord],
     library: &[SpectrumRecord],
     taxonomy: Option<&SearchTaxonomyConfig>,
     top_n: usize,
 ) -> SearchArtifactResult {
-    let hits = enrich_search_hits(base.hits, library, taxonomy, top_n);
+    let hits = enrich_search_hits(base.hits, queries, library, taxonomy, top_n);
     SearchArtifactResult {
         hits,
         query_count: base.query_count,
@@ -1225,6 +1227,7 @@ fn build_search_artifact_result(
 
 fn enrich_search_hits(
     base_hits: Vec<CandidateHit>,
+    queries: &[SpectrumRecord],
     library: &[SpectrumRecord],
     taxonomy: Option<&SearchTaxonomyConfig>,
     top_n: usize,
@@ -1234,22 +1237,30 @@ fn enrich_search_hits(
             .iter()
             .map(|hit| build_search_candidate(hit, library, Some(taxonomy)))
             .collect::<Vec<_>>();
-        finalize_search_artifact_candidates(candidates, top_n)
+        finalize_search_artifact_candidates(candidates, queries, library, top_n)
     } else {
         base_hits
             .into_iter()
-            .map(|hit| SearchArtifactHit {
-                query_index: hit.query_index,
-                library_index: hit.library_index,
-                rank: hit.rank,
-                spectral_score: hit.spectral_score,
-                taxonomic_score: 0.0,
-                combined_score: hit.spectral_score,
-                matches: hit.matches,
-                matched_organism_name: None,
-                matched_organism_wikidata: None,
-                matched_shared_rank: None,
-                matched_short_inchikey: None,
+            .map(|hit| {
+                let query = &queries[hit.query_index];
+                let library_hit = &library[hit.library_index];
+                SearchArtifactHit {
+                    query_index: hit.query_index,
+                    library_index: hit.library_index,
+                    rank: hit.rank,
+                    spectral_score: hit.spectral_score,
+                    ms1_deviation_ppm: ms1_deviation_ppm(
+                        query.meta.precursor_mz,
+                        library_hit.meta.precursor_mz,
+                    ),
+                    taxonomic_score: 0.0,
+                    combined_score: hit.spectral_score,
+                    matches: hit.matches,
+                    matched_organism_name: None,
+                    matched_organism_wikidata: None,
+                    matched_shared_rank: None,
+                    matched_short_inchikey: None,
+                }
             })
             .collect()
     }
@@ -1302,6 +1313,8 @@ fn build_search_candidate(
 
 fn finalize_search_artifact_candidates(
     candidates: Vec<SearchCandidate>,
+    queries: &[SpectrumRecord],
+    library: &[SpectrumRecord],
     top_n: usize,
 ) -> Vec<SearchArtifactHit> {
     let mut by_query: Vec<Vec<SearchCandidate>> = Vec::new();
@@ -1317,11 +1330,17 @@ fn finalize_search_artifact_candidates(
     for (query_index, mut query_hits) in by_query.into_iter().enumerate() {
         query_hits.sort_by(search_candidate_order);
         for (rank, hit) in query_hits.into_iter().take(keep).enumerate() {
+            let query = &queries[query_index];
+            let library_hit = &library[hit.library_index];
             hits.push(SearchArtifactHit {
                 query_index,
                 library_index: hit.library_index,
                 rank: rank + 1,
                 spectral_score: hit.spectral_score,
+                ms1_deviation_ppm: ms1_deviation_ppm(
+                    query.meta.precursor_mz,
+                    library_hit.meta.precursor_mz,
+                ),
                 taxonomic_score: hit.taxonomic_score,
                 combined_score: hit.combined_score,
                 matches: hit.matches,
@@ -1338,6 +1357,13 @@ fn finalize_search_artifact_candidates(
             .then(left.rank.cmp(&right.rank))
     });
     hits
+}
+
+fn ms1_deviation_ppm(query_precursor_mz: f64, candidate_precursor_mz: f64) -> f64 {
+    if !query_precursor_mz.is_finite() || query_precursor_mz == 0.0 {
+        return 0.0;
+    }
+    ((candidate_precursor_mz - query_precursor_mz) / query_precursor_mz) * 1_000_000.0
 }
 
 fn search_candidate_order(left: &SearchCandidate, right: &SearchCandidate) -> std::cmp::Ordering {

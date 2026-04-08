@@ -67,12 +67,7 @@ pub fn export_search_tsv<TQ, TL>(
 
     let mut header = vec![
         "query_export_key".to_string(),
-        "query_node_id".to_string(),
-        "query_feature_id".to_string(),
-        "query_featurelist_feature_id".to_string(),
-        "query_scans".to_string(),
-        "query_label".to_string(),
-        "query_raw_name".to_string(),
+        "query_key_mode".to_string(),
         "hit_rank".to_string(),
         "hit_spectral_score".to_string(),
         "hit_taxonomic_score".to_string(),
@@ -83,6 +78,7 @@ pub fn export_search_tsv<TQ, TL>(
         "hit_taxonomic_organism_wikidata".to_string(),
         "hit_taxonomic_short_inchikey".to_string(),
         "hit_precursor_mz".to_string(),
+        "hit_ms1_deviation_ppm".to_string(),
         "hit_raw_name".to_string(),
     ];
     header.extend(dynamic_headers.iter().map(|key| format!("hit_{key}")));
@@ -100,16 +96,7 @@ pub fn export_search_tsv<TQ, TL>(
 
         let mut row = vec![
             query_key.value_for(query),
-            query.meta.id.to_string(),
-            query.meta.feature_id.clone().unwrap_or_default(),
-            query
-                .meta
-                .featurelist_feature_id
-                .clone()
-                .unwrap_or_default(),
-            query.meta.scans.clone().unwrap_or_default(),
-            query.meta.label.clone(),
-            query.meta.raw_name.clone(),
+            query_key.label().to_string(),
             hit.rank.to_string(),
             format!("{:.8}", hit.spectral_score),
             format!("{:.8}", hit.taxonomic_score),
@@ -120,6 +107,7 @@ pub fn export_search_tsv<TQ, TL>(
             hit.matched_organism_wikidata.clone().unwrap_or_default(),
             hit.matched_short_inchikey.clone().unwrap_or_default(),
             format!("{:.6}", hit_record.meta.precursor_mz),
+            format!("{:.4}", hit.ms1_deviation_ppm),
             hit_record.meta.raw_name.clone(),
         ];
         row.extend(dynamic_headers.iter().map(|key| {
@@ -166,6 +154,7 @@ struct JsonSearchRow {
     hit_taxonomic_organism_wikidata: Option<String>,
     hit_taxonomic_short_inchikey: Option<String>,
     hit_precursor_mz: f64,
+    hit_ms1_deviation_ppm: f64,
     hit_raw_name: String,
     hit_attributes: std::collections::BTreeMap<String, String>,
 }
@@ -200,6 +189,7 @@ pub fn export_search_json<TQ, TL>(
                 hit_taxonomic_organism_wikidata: hit.matched_organism_wikidata.clone(),
                 hit_taxonomic_short_inchikey: hit.matched_short_inchikey.clone(),
                 hit_precursor_mz: library_hit.meta.precursor_mz,
+                hit_ms1_deviation_ppm: hit.ms1_deviation_ppm,
                 hit_raw_name: library_hit.meta.raw_name.clone(),
                 hit_attributes: library_hit.meta.headers.clone(),
             })
@@ -359,6 +349,7 @@ mod tests {
                     library_index: 0,
                     rank: 1,
                     spectral_score: 0.95,
+                    ms1_deviation_ppm: 100_000.0,
                     taxonomic_score: 0.0,
                     combined_score: 0.95,
                     matches: 6,
@@ -372,6 +363,7 @@ mod tests {
                     library_index: 1,
                     rank: 2,
                     spectral_score: 0.75,
+                    ms1_deviation_ppm: 110_000.0,
                     taxonomic_score: 0.0,
                     combined_score: 0.75,
                     matches: 4,
@@ -395,16 +387,20 @@ mod tests {
         assert!(header.contains("hit_INCHIKEY"));
         assert!(header.contains("hit_SMILES"));
         assert!(header.contains("hit_ADDUCT"));
+        assert!(header.contains("query_key_mode"));
         assert!(header.contains("hit_spectral_score"));
         let first = lines.next().expect("first data row");
         let columns: Vec<_> = first.split('\t').collect();
-        assert_eq!(columns[7], "1");
-        assert_eq!(columns[8], "0.95000000");
-        assert_eq!(columns[9], "0.00000000");
-        assert_eq!(columns[10], "0.95000000");
-        assert_eq!(columns[11], "6");
-        assert_eq!(columns[16], "110.000000");
-        assert_eq!(columns[17], "hit one");
+        assert_eq!(columns[0], "feature_0");
+        assert_eq!(columns[1], "FEATURE_ID");
+        assert_eq!(columns[2], "1");
+        assert_eq!(columns[3], "0.95000000");
+        assert_eq!(columns[4], "0.00000000");
+        assert_eq!(columns[5], "0.95000000");
+        assert_eq!(columns[6], "6");
+        assert_eq!(columns[11], "110.000000");
+        assert_eq!(columns[12], "100000.0000");
+        assert_eq!(columns[13], "hit one");
     }
 
     #[test]
@@ -417,6 +413,7 @@ mod tests {
                 library_index: 0,
                 rank: 1,
                 spectral_score: 0.95,
+                ms1_deviation_ppm: 100_000.0,
                 taxonomic_score: 0.0,
                 combined_score: 0.95,
                 matches: 6,
@@ -436,6 +433,7 @@ mod tests {
             .expect("json export");
         assert!(json.contains("\"metric\": \"CosineGreedy\""));
         assert!(json.contains("\"hit_raw_name\": \"hit one\""));
+        assert!(json.contains("\"hit_ms1_deviation_ppm\": 100000.0"));
         assert!(json.contains("\"INCHIKEY\": \"AAAA\""));
     }
 }

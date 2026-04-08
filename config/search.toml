@@ -1,0 +1,23 @@
+[[jobs]]
+name = "mapp_vs_isdb_lotus"
+query_mgf = "/Users/pma/git_repos/EMI/spectral-matcher/fixtures/mapp_batch_00231.mgf"
+library_mgf = "/Users/pma/01_large_files/mgf/isdb_lotus_pos_energySum.mgf"
+output_json = "/Users/pma/git_repos/EMI/spectral-matcher/out/mapp_vs_isdb_lotus/search.json"
+output_tsv = "/Users/pma/git_repos/EMI/spectral-matcher/out/mapp_vs_isdb_lotus/search.tsv"
+
+[jobs.parse]
+min_peaks = 5
+max_peaks = 1000
+
+[jobs.search]
+metric = "CosineGreedy"
+tolerance = 0.2
+mz_power = 0.0
+intensity_power = 1.0
+parent_mass_tolerance = 0.05
+min_matched_peaks = 3
+min_similarity_threshold = 0.7
+top_n = 20
+
+[jobs.output]
+query_key = "FeatureId"
