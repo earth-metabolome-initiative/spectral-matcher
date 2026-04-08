@@ -37,7 +37,7 @@ pub struct SpectrumMetadata {
 pub struct SpectrumRecord<T = ()> {
     pub meta: SpectrumMetadata,
     pub peaks: Arc<Vec<(f64, f64)>>,
-    pub spectrum: Arc<GenericSpectrum<f64, f64>>,
+    pub spectrum: Arc<GenericSpectrum>,
     pub payload: T,
 }
 

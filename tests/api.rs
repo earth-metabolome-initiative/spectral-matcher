@@ -5,7 +5,9 @@ use std::net::{TcpListener, TcpStream};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use spectral_matcher::{NetworkBuildParams, NetworkRequest, ParseConfig, SearchRequest, SimilarityMetric};
+use spectral_matcher::{
+    NetworkBuildParams, NetworkRequest, ParseConfig, SearchRequest, SimilarityMetric,
+};
 
 fn free_port() -> u16 {
     TcpListener::bind("127.0.0.1:0")
@@ -55,7 +57,9 @@ fn request_json<T: serde::de::DeserializeOwned>(
         stream.write_all(body).map_err(|err| err.to_string())?;
     }
     let mut response = Vec::new();
-    stream.read_to_end(&mut response).map_err(|err| err.to_string())?;
+    stream
+        .read_to_end(&mut response)
+        .map_err(|err| err.to_string())?;
     let split = response
         .windows(4)
         .position(|window| window == b"\r\n\r\n")
@@ -79,11 +83,13 @@ fn health_and_sync_network_endpoints_work() {
     let url = start_server();
     let payload = serde_json::to_vec(&NetworkRequest {
         source_label: "query.mgf".to_string(),
-        mgf_text: Some(concat!(
-            "BEGIN IONS\nNAME=a\nPEPMASS=100.0\n10 100\n20 80\n30 50\nEND IONS\n",
-            "BEGIN IONS\nNAME=b\nPEPMASS=100.1\n10 100\n20 80\n30 50\nEND IONS\n"
-        )
-        .to_string()),
+        mgf_text: Some(
+            concat!(
+                "BEGIN IONS\nNAME=a\nPEPMASS=100.0\n10 100\n20 80\n30 50\nEND IONS\n",
+                "BEGIN IONS\nNAME=b\nPEPMASS=100.1\n10 100\n20 80\n30 50\nEND IONS\n"
+            )
+            .to_string(),
+        ),
         mgf_path: None,
         parse: ParseConfig {
             min_peaks: 1,
@@ -114,14 +120,12 @@ fn async_search_job_endpoints_work() {
     let payload = serde_json::to_vec(&SearchRequest {
         query_source_label: "query.mgf".to_string(),
         query_mgf_text: Some(
-            "BEGIN IONS\nNAME=q\nPEPMASS=100.0\n10 100\n20 80\n30 50\nEND IONS\n"
-                .to_string(),
+            "BEGIN IONS\nNAME=q\nPEPMASS=100.0\n10 100\n20 80\n30 50\nEND IONS\n".to_string(),
         ),
         query_mgf_path: None,
         library_source_label: "library.mgf".to_string(),
         library_mgf_text: Some(
-            "BEGIN IONS\nNAME=l\nPEPMASS=100.0\n10 100\n20 80\n30 50\nEND IONS\n"
-                .to_string(),
+            "BEGIN IONS\nNAME=l\nPEPMASS=100.0\n10 100\n20 80\n30 50\nEND IONS\n".to_string(),
         ),
         library_mgf_path: None,
         parse: ParseConfig {
@@ -147,17 +151,12 @@ fn async_search_job_endpoints_work() {
     .expect("serialize");
 
     let created: spectral_matcher::JobCreatedResponse =
-        request_json(&url, "POST", "/v1/library-search/jobs", Some(&payload))
-            .expect("create job");
+        request_json(&url, "POST", "/v1/library-search/jobs", Some(&payload)).expect("create job");
     let started = Instant::now();
     loop {
-        let status: spectral_matcher::JobStatusResponse = request_json(
-            &url,
-            "GET",
-            &format!("/v1/jobs/{}", created.job_id),
-            None,
-        )
-        .expect("job status");
+        let status: spectral_matcher::JobStatusResponse =
+            request_json(&url, "GET", &format!("/v1/jobs/{}", created.job_id), None)
+                .expect("job status");
         if status.status == spectral_matcher::JobStatus::Finished {
             break;
         }

@@ -1,9 +1,10 @@
 use std::sync::Arc;
 
 use mass_spectrometry::prelude::{
-    GenericSpectrum, GreedyCosine, HungarianCosine, LinearEntropy, ModifiedGreedyCosine,
-    ModifiedHungarianCosine, ModifiedLinearEntropy, MsEntropyCleanSpectrum, ScalarSimilarity,
-    SiriusMergeClosePeaks, SpectralProcessor, SpectrumAlloc, SpectrumMut,
+    GenericSpectrum, HungarianCosine, LinearCosine, LinearEntropy, ModifiedHungarianCosine,
+    ModifiedLinearCosine, ModifiedLinearEntropy, MsEntropyCleanSpectrum, ScalarSimilarity,
+    SimilarityComputationError, SiriusMergeClosePeaks, SpectralProcessor, SpectrumAlloc,
+    SpectrumMut,
 };
 use serde::{Deserialize, Serialize};
 
@@ -69,14 +70,20 @@ pub struct ComputeParams {
 }
 
 enum MetricScorerInner {
-    CosineHungarian(HungarianCosine<f64, f64>),
-    CosineGreedy(GreedyCosine<f64, f64>),
-    ModifiedCosine(ModifiedHungarianCosine<f64, f64>),
-    ModifiedGreedyCosine(ModifiedGreedyCosine<f64, f64>),
-    LinearEntropyWeighted(LinearEntropy<f64, f64>),
-    LinearEntropyUnweighted(LinearEntropy<f64, f64>),
-    ModifiedLinearEntropyWeighted(ModifiedLinearEntropy<f64, f64>),
-    ModifiedLinearEntropyUnweighted(ModifiedLinearEntropy<f64, f64>),
+    CosineHungarian(HungarianCosine),
+    CosineGreedy {
+        linear: LinearCosine,
+        fallback: HungarianCosine,
+    },
+    ModifiedCosine(ModifiedHungarianCosine),
+    ModifiedGreedyCosine {
+        linear: ModifiedLinearCosine,
+        fallback: ModifiedHungarianCosine,
+    },
+    LinearEntropyWeighted(LinearEntropy),
+    LinearEntropyUnweighted(LinearEntropy),
+    ModifiedLinearEntropyWeighted(ModifiedLinearEntropy),
+    ModifiedLinearEntropyUnweighted(ModifiedLinearEntropy),
 }
 
 pub struct MetricScorer {
@@ -87,30 +94,46 @@ pub struct MetricScorer {
 impl MetricScorer {
     pub fn new(params: ComputeParams) -> Result<Self, String> {
         let inner = match params.metric {
-            SimilarityMetric::CosineHungarian => HungarianCosine::new(
-                params.mz_power,
-                params.intensity_power,
-                params.tolerance,
-            )
-            .map(MetricScorerInner::CosineHungarian),
-            SimilarityMetric::CosineGreedy => GreedyCosine::new(
-                params.mz_power,
-                params.intensity_power,
-                params.tolerance,
-            )
-            .map(MetricScorerInner::CosineGreedy),
+            SimilarityMetric::CosineHungarian => {
+                HungarianCosine::new(params.mz_power, params.intensity_power, params.tolerance)
+                    .map(MetricScorerInner::CosineHungarian)
+            }
+            SimilarityMetric::CosineGreedy => {
+                match (
+                    LinearCosine::new(params.mz_power, params.intensity_power, params.tolerance),
+                    HungarianCosine::new(params.mz_power, params.intensity_power, params.tolerance),
+                ) {
+                    (Ok(linear), Ok(fallback)) => {
+                        Ok(MetricScorerInner::CosineGreedy { linear, fallback })
+                    }
+                    (Err(err), _) | (_, Err(err)) => Err(err),
+                }
+            }
             SimilarityMetric::ModifiedCosine => ModifiedHungarianCosine::new(
                 params.mz_power,
                 params.intensity_power,
                 params.tolerance,
             )
             .map(MetricScorerInner::ModifiedCosine),
-            SimilarityMetric::ModifiedGreedyCosine => ModifiedGreedyCosine::new(
-                params.mz_power,
-                params.intensity_power,
-                params.tolerance,
-            )
-            .map(MetricScorerInner::ModifiedGreedyCosine),
+            SimilarityMetric::ModifiedGreedyCosine => {
+                match (
+                    ModifiedLinearCosine::new(
+                        params.mz_power,
+                        params.intensity_power,
+                        params.tolerance,
+                    ),
+                    ModifiedHungarianCosine::new(
+                        params.mz_power,
+                        params.intensity_power,
+                        params.tolerance,
+                    ),
+                ) {
+                    (Ok(linear), Ok(fallback)) => {
+                        Ok(MetricScorerInner::ModifiedGreedyCosine { linear, fallback })
+                    }
+                    (Err(err), _) | (_, Err(err)) => Err(err),
+                }
+            }
             SimilarityMetric::LinearEntropyWeighted => LinearEntropy::new(
                 params.mz_power,
                 params.intensity_power,
@@ -150,16 +173,20 @@ impl MetricScorer {
 
     pub fn similarity(
         &self,
-        left: &GenericSpectrum<f64, f64>,
-        right: &GenericSpectrum<f64, f64>,
+        left: &GenericSpectrum,
+        right: &GenericSpectrum,
         left_idx: usize,
         right_idx: usize,
     ) -> Result<(f64, usize), String> {
         let result = match &self.inner {
             MetricScorerInner::CosineHungarian(sim) => sim.similarity(left, right),
-            MetricScorerInner::CosineGreedy(sim) => sim.similarity(left, right),
+            MetricScorerInner::CosineGreedy { linear, fallback } => {
+                similarity_with_spacing_fallback(linear, fallback, left, right)
+            }
             MetricScorerInner::ModifiedCosine(sim) => sim.similarity(left, right),
-            MetricScorerInner::ModifiedGreedyCosine(sim) => sim.similarity(left, right),
+            MetricScorerInner::ModifiedGreedyCosine { linear, fallback } => {
+                similarity_with_spacing_fallback(linear, fallback, left, right)
+            }
             MetricScorerInner::LinearEntropyWeighted(sim) => sim.similarity(left, right),
             MetricScorerInner::LinearEntropyUnweighted(sim) => sim.similarity(left, right),
             MetricScorerInner::ModifiedLinearEntropyWeighted(sim) => sim.similarity(left, right),
@@ -174,6 +201,30 @@ impl MetricScorer {
     }
 }
 
+fn similarity_with_spacing_fallback<L, F>(
+    linear: &L,
+    fallback: &F,
+    left: &GenericSpectrum,
+    right: &GenericSpectrum,
+) -> Result<(f64, usize), SimilarityComputationError>
+where
+    L: ScalarSimilarity<
+            GenericSpectrum,
+            GenericSpectrum,
+            Similarity = Result<(f64, usize), SimilarityComputationError>,
+        >,
+    F: ScalarSimilarity<
+            GenericSpectrum,
+            GenericSpectrum,
+            Similarity = Result<(f64, usize), SimilarityComputationError>,
+        >,
+{
+    match linear.similarity(left, right) {
+        Err(SimilarityComputationError::InvalidPeakSpacing(_)) => fallback.similarity(left, right),
+        other => other,
+    }
+}
+
 pub fn preprocess_spectra_for_metric<T>(
     spectra: Vec<SpectrumRecord<T>>,
     params: ComputeParams,
@@ -184,7 +235,7 @@ pub fn preprocess_spectra_for_metric<T>(
         return Ok(spectra);
     }
 
-    let cleaner = MsEntropyCleanSpectrum::<f64>::builder()
+    let cleaner = MsEntropyCleanSpectrum::builder()
         .build()
         .map_err(|err| format!("failed to configure ms_entropy cleaner: {err:?}"))?;
     let merger = SiriusMergeClosePeaks::new(params.tolerance)
@@ -222,13 +273,14 @@ fn apply_top_n_peak_filter<T>(
             selected.sort_by(|a, b| a.0.total_cmp(&b.0));
 
             let mut spectrum =
-                GenericSpectrum::<f64, f64>::with_capacity(record.meta.precursor_mz, selected.len())
-                    .map_err(|err| {
+                GenericSpectrum::with_capacity(record.meta.precursor_mz, selected.len()).map_err(
+                    |err| {
                         format!(
                             "failed to allocate top-{limit} filtered spectrum for node {}: {err:?}",
                             record.meta.id
                         )
-                    })?;
+                    },
+                )?;
             for (mz, intensity) in &selected {
                 spectrum.add_peak(*mz, *intensity).map_err(|err| {
                     format!(
@@ -256,8 +308,8 @@ mod tests {
     fn record(id: usize, peaks: &[(f64, f64)]) -> SpectrumRecord {
         let mut sorted_peaks = peaks.to_vec();
         sorted_peaks.sort_by(|a, b| a.0.total_cmp(&b.0));
-        let mut spectrum = GenericSpectrum::<f64, f64>::with_capacity(100.0, sorted_peaks.len())
-            .expect("alloc test spectrum");
+        let mut spectrum =
+            GenericSpectrum::with_capacity(100.0, sorted_peaks.len()).expect("alloc test spectrum");
         for (mz, intensity) in &sorted_peaks {
             spectrum.add_peak(*mz, *intensity).expect("add test peak");
         }
@@ -283,7 +335,10 @@ mod tests {
 
     #[test]
     fn top_n_peak_filter_keeps_most_intense_peaks_for_similarity_only() {
-        let spectra = vec![record(0, &[(50.0, 0.4), (10.0, 1.0), (30.0, 0.8), (20.0, 0.2)])];
+        let spectra = vec![record(
+            0,
+            &[(50.0, 0.4), (10.0, 1.0), (30.0, 0.8), (20.0, 0.2)],
+        )];
         let processed = preprocess_spectra_for_metric(
             spectra,
             ComputeParams {
@@ -305,10 +360,57 @@ mod tests {
         })
         .expect("scorer");
         let (score, matches) = scorer
-            .similarity(processed[0].spectrum.as_ref(), reference.spectrum.as_ref(), 0, 1)
+            .similarity(
+                processed[0].spectrum.as_ref(),
+                reference.spectrum.as_ref(),
+                0,
+                1,
+            )
             .expect("similarity");
 
         assert_eq!(processed[0].peaks.as_ref().len(), 4);
+        assert_eq!(matches, 2);
+        assert!((score - 1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn cosine_greedy_falls_back_when_peak_spacing_is_too_tight_for_linear_cosine() {
+        let left = record(0, &[(10.0, 1.0), (10.15, 0.5)]);
+        let right = record(1, &[(10.0, 1.0), (10.15, 0.5)]);
+        let scorer = MetricScorer::new(ComputeParams {
+            metric: SimilarityMetric::CosineGreedy,
+            tolerance: 0.1,
+            mz_power: 0.0,
+            intensity_power: 1.0,
+            top_n_peaks: None,
+        })
+        .expect("scorer");
+
+        let (score, matches) = scorer
+            .similarity(left.spectrum.as_ref(), right.spectrum.as_ref(), 0, 1)
+            .expect("fallback similarity");
+
+        assert_eq!(matches, 2);
+        assert!((score - 1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn modified_greedy_falls_back_when_peak_spacing_is_too_tight_for_linear_cosine() {
+        let left = record(0, &[(10.0, 1.0), (10.15, 0.5)]);
+        let right = record(1, &[(10.0, 1.0), (10.15, 0.5)]);
+        let scorer = MetricScorer::new(ComputeParams {
+            metric: SimilarityMetric::ModifiedGreedyCosine,
+            tolerance: 0.1,
+            mz_power: 0.0,
+            intensity_power: 1.0,
+            top_n_peaks: None,
+        })
+        .expect("scorer");
+
+        let (score, matches) = scorer
+            .similarity(left.spectrum.as_ref(), right.spectrum.as_ref(), 0, 1)
+            .expect("fallback similarity");
+
         assert_eq!(matches, 2);
         assert!((score - 1.0).abs() < 1e-9);
     }

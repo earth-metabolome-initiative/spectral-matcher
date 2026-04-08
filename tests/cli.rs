@@ -20,9 +20,7 @@ fn write_file(path: &PathBuf, contents: &str) {
 }
 
 fn sample_mgf(name: &str) -> String {
-    format!(
-        "BEGIN IONS\nNAME={name}\nPEPMASS=100.0\n10 100\n20 80\n30 50\nEND IONS\n"
-    )
+    format!("BEGIN IONS\nNAME={name}\nPEPMASS=100.0\n10 100\n20 80\n30 50\nEND IONS\n")
 }
 
 #[test]

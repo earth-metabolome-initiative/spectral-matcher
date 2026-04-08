@@ -1,14 +1,14 @@
-use std::sync::Arc;
 #[cfg(not(target_arch = "wasm32"))]
 use std::cmp::Reverse;
 #[cfg(not(target_arch = "wasm32"))]
 use std::collections::{BinaryHeap, HashMap};
 #[cfg(not(target_arch = "wasm32"))]
 use std::path::{Path, PathBuf};
-#[cfg(not(target_arch = "wasm32"))]
-use std::sync::OnceLock;
+use std::sync::Arc;
 #[cfg(not(target_arch = "wasm32"))]
 use std::sync::Mutex;
+#[cfg(not(target_arch = "wasm32"))]
+use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver};
 #[cfg(not(target_arch = "wasm32"))]
@@ -186,7 +186,12 @@ fn load_search_taxonomy_config(
 
     let query = lotus
         .resolve_query_lineage(&request.query_text)
-        .ok_or_else(|| format!("Biosource not found in LOTUS: {}", request.query_text.trim()))?;
+        .ok_or_else(|| {
+            format!(
+                "Biosource not found in LOTUS: {}",
+                request.query_text.trim()
+            )
+        })?;
 
     Ok(SearchTaxonomyConfig { lotus, query })
 }
@@ -258,45 +263,45 @@ pub fn build_network_artifact(request: NetworkRequest) -> Result<NetworkArtifact
 
     #[cfg(target_arch = "wasm32")]
     {
-    let loaded = load_request_spectra(
-        &request.source_label,
-        request.mgf_text.as_deref(),
-        request.mgf_path.as_deref(),
-        request.parse.min_peaks,
-        request.parse.max_peaks,
-    )?;
-    let spectra = preprocess_spectra_for_metric(loaded.spectra.clone(), request.build.compute)?;
-    let scorer = MetricScorer::new(request.build.compute)?;
-    #[cfg(not(target_arch = "wasm32"))]
-    let pair_scores = score_all_pairs_parallel(&spectra, &scorer)?;
-    #[cfg(target_arch = "wasm32")]
-    let pair_scores = score_all_pairs(&spectra, &scorer)?;
-    let metas = loaded
-        .spectra
-        .iter()
-        .map(|record| record.meta.clone())
-        .collect::<Vec<_>>();
-    let network = build_network(
-        &metas,
-        &pair_scores,
-        request.build.threshold.clamp(0.0, 1.0),
-        request.build.top_k.max(1),
-    );
-    let spectra = loaded
-        .spectra
-        .iter()
-        .map(|record| NetworkSpectrum {
-            meta: record.meta.clone(),
-            peaks: record.peaks.as_ref().clone(),
+        let loaded = load_request_spectra(
+            &request.source_label,
+            request.mgf_text.as_deref(),
+            request.mgf_path.as_deref(),
+            request.parse.min_peaks,
+            request.parse.max_peaks,
+        )?;
+        let spectra = preprocess_spectra_for_metric(loaded.spectra.clone(), request.build.compute)?;
+        let scorer = MetricScorer::new(request.build.compute)?;
+        #[cfg(not(target_arch = "wasm32"))]
+        let pair_scores = score_all_pairs_parallel(&spectra, &scorer)?;
+        #[cfg(target_arch = "wasm32")]
+        let pair_scores = score_all_pairs(&spectra, &scorer)?;
+        let metas = loaded
+            .spectra
+            .iter()
+            .map(|record| record.meta.clone())
+            .collect::<Vec<_>>();
+        let network = build_network(
+            &metas,
+            &pair_scores,
+            request.build.threshold.clamp(0.0, 1.0),
+            request.build.top_k.max(1),
+        );
+        let spectra = loaded
+            .spectra
+            .iter()
+            .map(|record| NetworkSpectrum {
+                meta: record.meta.clone(),
+                peaks: record.peaks.as_ref().clone(),
+            })
+            .collect();
+        Ok(NetworkArtifact {
+            source_label: loaded.source_label,
+            parse_stats: loaded.stats,
+            build: request.build,
+            spectra,
+            network,
         })
-        .collect();
-    Ok(NetworkArtifact {
-        source_label: loaded.source_label,
-        parse_stats: loaded.stats,
-        build: request.build,
-        spectra,
-        network,
-    })
     }
 }
 
@@ -308,61 +313,61 @@ pub fn run_search_request(request: SearchRequest) -> Result<SearchArtifact, Stri
 
     #[cfg(target_arch = "wasm32")]
     {
-    let queries = load_request_spectra(
-        &request.query_source_label,
-        request.query_mgf_text.as_deref(),
-        request.query_mgf_path.as_deref(),
-        request.parse.min_peaks,
-        request.parse.max_peaks,
-    )?;
-    let library = load_request_spectra(
-        &request.library_source_label,
-        request.library_mgf_text.as_deref(),
-        request.library_mgf_path.as_deref(),
-        request.parse.min_peaks,
-        request.parse.max_peaks,
-    )?;
-    let taxonomy = request
-        .taxonomy
-        .as_ref()
-        .map(load_search_taxonomy_config)
-        .transpose()?;
-    let search_params =
-        effective_search_params(&request.search, library.spectra.len(), taxonomy.is_some());
-    let query_key = request.query_key.unwrap_or(SearchQueryKey::FeatureId);
-    let result = search_library(
-        queries.spectra.clone(),
-        library.spectra.clone(),
-        search_params,
-    )?;
-    let enriched = build_search_artifact_result(
-        result,
-        &library.spectra,
-        taxonomy.as_ref(),
-        request.search.top_n,
-    );
-    let tsv = export_search_tsv(&enriched, &queries.spectra, &library.spectra, query_key);
-    Ok(SearchArtifact {
-        query_source_label: queries.source_label,
-        library_source_label: library.source_label,
-        query_stats: queries.stats,
-        library_stats: library.stats,
-        search: request.search,
-        taxonomy: request.taxonomy,
-        query_key,
-        query_spectra: queries
-            .spectra
-            .iter()
-            .map(|record| record.meta.clone())
-            .collect(),
-        library_spectra: library
-            .spectra
-            .iter()
-            .map(|record| record.meta.clone())
-            .collect(),
-        result: enriched,
-        tsv,
-    })
+        let queries = load_request_spectra(
+            &request.query_source_label,
+            request.query_mgf_text.as_deref(),
+            request.query_mgf_path.as_deref(),
+            request.parse.min_peaks,
+            request.parse.max_peaks,
+        )?;
+        let library = load_request_spectra(
+            &request.library_source_label,
+            request.library_mgf_text.as_deref(),
+            request.library_mgf_path.as_deref(),
+            request.parse.min_peaks,
+            request.parse.max_peaks,
+        )?;
+        let taxonomy = request
+            .taxonomy
+            .as_ref()
+            .map(load_search_taxonomy_config)
+            .transpose()?;
+        let search_params =
+            effective_search_params(&request.search, library.spectra.len(), taxonomy.is_some());
+        let query_key = request.query_key.unwrap_or(SearchQueryKey::FeatureId);
+        let result = search_library(
+            queries.spectra.clone(),
+            library.spectra.clone(),
+            search_params,
+        )?;
+        let enriched = build_search_artifact_result(
+            result,
+            &library.spectra,
+            taxonomy.as_ref(),
+            request.search.top_n,
+        );
+        let tsv = export_search_tsv(&enriched, &queries.spectra, &library.spectra, query_key);
+        Ok(SearchArtifact {
+            query_source_label: queries.source_label,
+            library_source_label: library.source_label,
+            query_stats: queries.stats,
+            library_stats: library.stats,
+            search: request.search,
+            taxonomy: request.taxonomy,
+            query_key,
+            query_spectra: queries
+                .spectra
+                .iter()
+                .map(|record| record.meta.clone())
+                .collect(),
+            library_spectra: library
+                .spectra
+                .iter()
+                .map(|record| record.meta.clone())
+                .collect(),
+            result: enriched,
+            tsv,
+        })
     }
 }
 
@@ -551,14 +556,20 @@ fn load_request_spectra(
 
     #[cfg(target_arch = "wasm32")]
     if mgf_path.is_some() {
-        return Err("MGF path requests are unavailable on wasm; provide inline MGF text".to_string());
+        return Err(
+            "MGF path requests are unavailable on wasm; provide inline MGF text".to_string(),
+        );
     }
 
     Err("request did not provide an MGF source".to_string())
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn load_mgf_path_cached(path: &Path, min_peaks: usize, max_peaks: usize) -> Result<LoadedSpectra, String> {
+fn load_mgf_path_cached(
+    path: &Path,
+    min_peaks: usize,
+    max_peaks: usize,
+) -> Result<LoadedSpectra, String> {
     let canonical = std::fs::canonicalize(path)
         .map_err(|err| format!("cannot resolve {}: {err}", path.display()))?;
     let fingerprint = file_fingerprint(&canonical)?;
@@ -589,8 +600,8 @@ fn load_mgf_path_cached(path: &Path, min_peaks: usize, max_peaks: usize) -> Resu
 
 #[cfg(not(target_arch = "wasm32"))]
 fn file_fingerprint(path: &Path) -> Result<FileFingerprint, String> {
-    let metadata = std::fs::metadata(path)
-        .map_err(|err| format!("cannot stat {}: {err}", path.display()))?;
+    let metadata =
+        std::fs::metadata(path).map_err(|err| format!("cannot stat {}: {err}", path.display()))?;
     let modified = metadata
         .modified()
         .ok()
@@ -895,8 +906,8 @@ fn score_query_library_pairs(
             let left = queries[query_idx].spectrum.as_ref();
             let right = library[library_idx].spectrum.as_ref();
             match scorer.similarity(left, right, query_idx, library_idx) {
-                Ok((score, matches)) => search_match_passes(score, matches, params).then_some(
-                    SearchCandidate {
+                Ok((score, matches)) => {
+                    search_match_passes(score, matches, params).then_some(SearchCandidate {
                         query_index: query_idx,
                         library_index: library_idx,
                         spectral_score: score,
@@ -907,8 +918,8 @@ fn score_query_library_pairs(
                         matched_organism_wikidata: None,
                         matched_shared_rank: None,
                         matched_short_inchikey: None,
-                    },
-                ),
+                    })
+                }
                 Err(err) => {
                     if let Ok(mut slot) = error_worker.lock()
                         && slot.is_none()
@@ -1080,7 +1091,11 @@ fn ranked_heap_to_selected_neighbors(
         return Vec::new();
     };
     let mut ranked: Vec<RankedNeighbor> = heap.into_iter().map(|entry| entry.0).collect();
-    ranked.sort_by(|a, b| b.score.total_cmp(&a.score).then(a.neighbor.cmp(&b.neighbor)));
+    ranked.sort_by(|a, b| {
+        b.score
+            .total_cmp(&a.score)
+            .then(a.neighbor.cmp(&b.neighbor))
+    });
     ranked.truncate(top_k);
     ranked
         .into_iter()
@@ -1345,7 +1360,7 @@ mod tests {
     use crate::similarity::SimilarityMetric;
 
     fn spectrum(id: usize, precursor: f64, peaks: &[(f64, f64)]) -> SpectrumRecord {
-        let mut spec = GenericSpectrum::<f64, f64>::with_capacity(precursor, peaks.len())
+        let mut spec = GenericSpectrum::with_capacity(precursor, peaks.len())
             .expect("failed to allocate spectrum");
         for (mz, intensity) in peaks {
             spec.add_peak(*mz, *intensity)
@@ -1473,7 +1488,10 @@ mod tests {
         let artifact = run_search_request(request).expect("search request");
 
         assert!(artifact.result.taxonomic_reranking_applied);
-        assert_eq!(artifact.result.taxonomic_query.as_deref(), Some("Withania somnifera"));
+        assert_eq!(
+            artifact.result.taxonomic_query.as_deref(),
+            Some("Withania somnifera")
+        );
         assert_eq!(artifact.result.hits.len(), 1);
         assert_eq!(artifact.result.hits[0].library_index, 0);
         assert_eq!(artifact.result.hits[0].taxonomic_score, 9.0);
@@ -1539,7 +1557,10 @@ mod tests {
         assert_eq!(artifact.result.hits.len(), 1);
         assert_eq!(artifact.result.hits[0].library_index, 0);
         assert_eq!(artifact.result.hits[0].taxonomic_score, 8.0);
-        assert_eq!(artifact.result.hits[0].matched_shared_rank.as_deref(), Some("genus"));
+        assert_eq!(
+            artifact.result.hits[0].matched_shared_rank.as_deref(),
+            Some("genus")
+        );
     }
 
     #[test]

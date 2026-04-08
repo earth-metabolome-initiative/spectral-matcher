@@ -223,7 +223,10 @@ impl LotusMetadataIndex {
                     candidate.score > current.score
                         || (candidate.score == current.score
                             && biosource.lineage.specificity_score()
-                                > current.shared_rank.map(|rank| rank.score() as usize).unwrap_or(0))
+                                > current
+                                    .shared_rank
+                                    .map(|rank| rank.score() as usize)
+                                    .unwrap_or(0))
                         || (candidate.score == current.score
                             && candidate.matched_organism_name.as_deref()
                                 < current.matched_organism_name.as_deref())
@@ -342,7 +345,10 @@ fn parse_lotus_reader<R: Read>(reader: R) -> Result<LotusMetadataIndex, String> 
             organism_wikidata: organism_wikidata.clone(),
             lineage: lineage.clone(),
         };
-        by_short_inchikey.entry(short_key).or_default().push(biosource);
+        by_short_inchikey
+            .entry(short_key)
+            .or_default()
+            .push(biosource);
 
         by_organism_name
             .entry(organism_name)
@@ -438,7 +444,10 @@ mod tests {
 
         let by_qid = lotus.resolve_query_lineage("Q1").expect("qid lineage");
         assert_eq!(by_qid.query_label, "Q1");
-        assert_eq!(by_qid.lineage.value_for(TaxonomicRank::Genus), Some("Withania"));
+        assert_eq!(
+            by_qid.lineage.value_for(TaxonomicRank::Genus),
+            Some("Withania")
+        );
 
         let by_genus = lotus
             .resolve_query_lineage("Withania")
@@ -448,7 +457,10 @@ mod tests {
             by_genus.lineage.value_for(TaxonomicRank::Family),
             Some("Solanaceae")
         );
-        assert_eq!(by_genus.lineage.value_for(TaxonomicRank::Genus), Some("Withania"));
+        assert_eq!(
+            by_genus.lineage.value_for(TaxonomicRank::Genus),
+            Some("Withania")
+        );
         assert_eq!(by_genus.lineage.value_for(TaxonomicRank::Species), None);
     }
 }

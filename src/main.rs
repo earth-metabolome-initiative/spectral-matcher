@@ -154,8 +154,8 @@ where
 
 #[cfg(not(target_arch = "wasm32"))]
 fn run_search_config(path: &Path) -> Result<(), String> {
-    let raw =
-        std::fs::read_to_string(path).map_err(|err| format!("failed to read {}: {err}", path.display()))?;
+    let raw = std::fs::read_to_string(path)
+        .map_err(|err| format!("failed to read {}: {err}", path.display()))?;
     let config: SearchBatchConfig =
         toml::from_str(&raw).map_err(|err| format!("failed to parse {}: {err}", path.display()))?;
     if config.jobs.is_empty() {
@@ -197,8 +197,8 @@ fn run_search_job(label: &str, job: SearchJobConfig) -> Result<(), String> {
         taxonomy: None,
         query_key: job.output.query_key,
     };
-    let artifact = run_search_request(request)
-        .map_err(|err| format!("{label}: search failed: {err}"))?;
+    let artifact =
+        run_search_request(request).map_err(|err| format!("{label}: search failed: {err}"))?;
     let json = serde_json::to_string_pretty(&artifact)
         .map_err(|err| format!("{label}: failed to serialize JSON output: {err}"))?;
     save_json_to_path(&job.output_json, &json)
@@ -212,8 +212,8 @@ fn run_search_job(label: &str, job: SearchJobConfig) -> Result<(), String> {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn run_network_config(path: &Path) -> Result<(), String> {
-    let raw =
-        std::fs::read_to_string(path).map_err(|err| format!("failed to read {}: {err}", path.display()))?;
+    let raw = std::fs::read_to_string(path)
+        .map_err(|err| format!("failed to read {}: {err}", path.display()))?;
     let config: NetworkBatchConfig =
         toml::from_str(&raw).map_err(|err| format!("failed to parse {}: {err}", path.display()))?;
     if config.jobs.is_empty() {
@@ -251,7 +251,10 @@ fn run_network_job(label: &str, job: NetworkJobConfig) -> Result<(), String> {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn save_network_csvs(dir: &Path, artifact: &spectral_matcher::NetworkArtifact) -> Result<(), String> {
+fn save_network_csvs(
+    dir: &Path,
+    artifact: &spectral_matcher::NetworkArtifact,
+) -> Result<(), String> {
     std::fs::create_dir_all(dir)
         .map_err(|err| format!("failed to create {}: {err}", dir.display()))?;
     let nodes_path = dir.join("nodes.csv");

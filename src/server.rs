@@ -82,8 +82,8 @@ impl JobProgressTracker {
 }
 
 pub fn serve(bind: &str) -> Result<(), String> {
-    let listener = TcpListener::bind(bind)
-        .map_err(|err| format!("failed to bind {bind}: {err}"))?;
+    let listener =
+        TcpListener::bind(bind).map_err(|err| format!("failed to bind {bind}: {err}"))?;
     let state = Arc::new(ServerState::default());
 
     for stream in listener.incoming() {
@@ -178,25 +178,29 @@ fn find_header_end(buffer: &[u8]) -> Option<usize> {
 fn handle_request(request: HttpRequest, state: &Arc<ServerState>) -> Vec<u8> {
     match (request.method.as_str(), request.path.as_str()) {
         ("GET", "/v1/health") => json_response(200, &HealthResponse { status: "ok" }),
-        ("POST", "/v1/network") => match decode_json::<NetworkRequest>(&request.body)
-            .and_then(build_network_artifact)
-        {
-            Ok(artifact) => json_response(200, &artifact),
-            Err(err) => error_response(400, &err),
-        },
-        ("POST", "/v1/library-search") => match decode_json::<SearchRequest>(&request.body)
-            .and_then(run_search_request)
-        {
-            Ok(artifact) => json_response(200, &artifact),
-            Err(err) => error_response(400, &err),
-        },
+        ("POST", "/v1/network") => {
+            match decode_json::<NetworkRequest>(&request.body).and_then(build_network_artifact) {
+                Ok(artifact) => json_response(200, &artifact),
+                Err(err) => error_response(400, &err),
+            }
+        }
+        ("POST", "/v1/library-search") => {
+            match decode_json::<SearchRequest>(&request.body).and_then(run_search_request) {
+                Ok(artifact) => json_response(200, &artifact),
+                Err(err) => error_response(400, &err),
+            }
+        }
         ("POST", "/v1/network/jobs") => match decode_json::<NetworkRequest>(&request.body) {
             Ok(payload) => start_job(state, move |progress| {
                 let progress_for_updates = Arc::clone(&progress);
                 let progress_for_cancel = Arc::clone(&progress);
-                build_network_artifact_with_progress(payload, move |stage, completed, total| {
-                    progress_for_updates.set(stage, completed, total);
-                }, move || progress_for_cancel.is_cancelled())
+                build_network_artifact_with_progress(
+                    payload,
+                    move |stage, completed, total| {
+                        progress_for_updates.set(stage, completed, total);
+                    },
+                    move || progress_for_cancel.is_cancelled(),
+                )
                 .map(MatcherJobResult::Network)
             }),
             Err(err) => error_response(400, &err),
@@ -205,9 +209,13 @@ fn handle_request(request: HttpRequest, state: &Arc<ServerState>) -> Vec<u8> {
             Ok(payload) => start_job(state, move |progress| {
                 let progress_for_updates = Arc::clone(&progress);
                 let progress_for_cancel = Arc::clone(&progress);
-                run_search_request_with_progress(payload, move |stage, completed, total| {
-                    progress_for_updates.set(stage, completed, total);
-                }, move || progress_for_cancel.is_cancelled())
+                run_search_request_with_progress(
+                    payload,
+                    move |stage, completed, total| {
+                        progress_for_updates.set(stage, completed, total);
+                    },
+                    move || progress_for_cancel.is_cancelled(),
+                )
                 .map(MatcherJobResult::LibrarySearch)
             }),
             Err(err) => error_response(400, &err),
@@ -422,8 +430,8 @@ mod tests {
 
     #[test]
     fn raw_response_contains_content_length() {
-        let response = String::from_utf8(raw_response(200, "application/json", br#"{"ok":1}"#))
-            .expect("utf8");
+        let response =
+            String::from_utf8(raw_response(200, "application/json", br#"{"ok":1}"#)).expect("utf8");
         assert!(response.contains("Content-Length: 8"));
     }
 }

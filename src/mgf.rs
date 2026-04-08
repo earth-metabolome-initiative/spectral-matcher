@@ -66,12 +66,15 @@ impl NativeLoadHandle {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-pub fn load_mgf_path(path: &Path, min_peaks: usize, max_peaks: usize) -> Result<LoadedSpectra, String> {
+pub fn load_mgf_path(
+    path: &Path,
+    min_peaks: usize,
+    max_peaks: usize,
+) -> Result<LoadedSpectra, String> {
     use std::fs::File;
     use std::io::BufReader;
 
-    let file =
-        File::open(path).map_err(|err| format!("cannot open {}: {err}", path.display()))?;
+    let file = File::open(path).map_err(|err| format!("cannot open {}: {err}", path.display()))?;
     let (parsed, stats) = parse_mgf_reader_local(BufReader::new(file), min_peaks, max_peaks)?;
     let spectra = to_records(parsed)?;
     Ok(LoadedSpectra {
@@ -384,9 +387,8 @@ fn sanitize_name(raw_name: &str) -> String {
 }
 
 fn parsed_spectrum_to_record(idx: usize, spec: ParsedSpectrum) -> Result<SpectrumRecord, String> {
-    let mut spectrum =
-        GenericSpectrum::<f64, f64>::with_capacity(spec.precursor_mz, spec.peaks.len())
-            .map_err(|err| format!("failed to create spectrum capacity: {err:?}"))?;
+    let mut spectrum = GenericSpectrum::with_capacity(spec.precursor_mz, spec.peaks.len())
+        .map_err(|err| format!("failed to create spectrum capacity: {err:?}"))?;
     for (mz, intensity) in &spec.peaks {
         spectrum
             .add_peak(*mz, *intensity)

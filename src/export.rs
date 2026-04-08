@@ -39,7 +39,11 @@ impl SearchQueryKey {
     pub fn value_for<T>(self, record: &SpectrumRecord<T>) -> String {
         match self {
             Self::FeatureId => record.meta.feature_id.clone().unwrap_or_default(),
-            Self::FeaturelistFeatureId => record.meta.featurelist_feature_id.clone().unwrap_or_default(),
+            Self::FeaturelistFeatureId => record
+                .meta
+                .featurelist_feature_id
+                .clone()
+                .unwrap_or_default(),
             Self::Scans => record.meta.scans.clone().unwrap_or_default(),
             Self::RawName => record.meta.raw_name.clone(),
             Self::Label => record.meta.label.clone(),
@@ -98,7 +102,11 @@ pub fn export_search_tsv<TQ, TL>(
             query_key.value_for(query),
             query.meta.id.to_string(),
             query.meta.feature_id.clone().unwrap_or_default(),
-            query.meta.featurelist_feature_id.clone().unwrap_or_default(),
+            query
+                .meta
+                .featurelist_feature_id
+                .clone()
+                .unwrap_or_default(),
             query.meta.scans.clone().unwrap_or_default(),
             query.meta.label.clone(),
             query.meta.raw_name.clone(),
@@ -308,8 +316,7 @@ mod tests {
     use super::{SearchQueryKey, export_search_json, export_search_tsv};
 
     fn spectrum_record(id: usize, raw_name: &str, headers: &[(&str, &str)]) -> SpectrumRecord {
-        let spectrum =
-            GenericSpectrum::<f64, f64>::with_capacity(100.0 + id as f64, 0).expect("spectrum");
+        let spectrum = GenericSpectrum::with_capacity(100.0 + id as f64, 0).expect("spectrum");
         let mut header_map = BTreeMap::new();
         for (key, value) in headers {
             header_map.insert((*key).to_string(), (*value).to_string());
