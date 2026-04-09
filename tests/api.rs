@@ -102,7 +102,7 @@ fn health_and_sync_network_endpoints_work() {
         },
         build: NetworkBuildParams {
             compute: spectral_matcher::ComputeParams {
-                metric: SimilarityMetric::CosineGreedy,
+                metric: SimilarityMetric::LinearCosine,
                 fragment_mz_tolerance: 0.2,
                 mz_power: 0.0,
                 intensity_power: 1.0,
@@ -140,7 +140,7 @@ fn async_search_job_endpoints_work() {
         },
         search: spectral_matcher::LibrarySearchParams {
             compute: spectral_matcher::ComputeParams {
-                metric: SimilarityMetric::CosineGreedy,
+                metric: SimilarityMetric::LinearCosine,
                 fragment_mz_tolerance: 0.2,
                 mz_power: 0.0,
                 intensity_power: 1.0,

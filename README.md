@@ -75,7 +75,7 @@ min_peaks = 5
 max_peaks = 1000
 
 [jobs.build.compute]
-metric = "CosineGreedy"
+metric = "LinearCosine"
 fragment_mz_tolerance = 0.2
 mz_power = 0.0
 intensity_power = 1.0
@@ -107,10 +107,10 @@ Notes:
 
 ## Available Metrics
 
-- `CosineHungarian`: exact cosine matching with Hungarian assignment; slower, more exhaustive.
-- `CosineGreedy`: fast cosine matching with greedy assignment; default choice for most runs.
-- `ModifiedCosine`: precursor-shift-aware cosine using Hungarian assignment for analog-style matching.
-- `ModifiedGreedyCosine`: faster precursor-shift-aware cosine using greedy assignment.
+- `HungarianCosine`: exact cosine matching with Hungarian assignment; default and most robust.
+- `LinearCosine`: linear-time cosine; requires well-separated peaks and errors otherwise.
+- `ModifiedHungarianCosine`: precursor-shift-aware cosine using Hungarian assignment for analog-style matching.
+- `ModifiedLinearCosine`: linear-time precursor-shift-aware cosine; requires well-separated peaks.
 - `LinearEntropyWeighted`: spectral entropy similarity with intensity weighting after entropy preprocessing.
 - `LinearEntropyUnweighted`: spectral entropy similarity without intensity weighting after entropy preprocessing.
 - `ModifiedLinearEntropyWeighted`: precursor-shift-aware spectral entropy similarity with intensity weighting.
@@ -138,7 +138,7 @@ min_peaks = 5
 max_peaks = 1000
 
 [jobs.search]
-metric = "CosineGreedy"
+metric = "LinearCosine"
 precursor_mz_tolerance = 0.05
 fragment_mz_tolerance = 0.2
 mz_power = 0.0

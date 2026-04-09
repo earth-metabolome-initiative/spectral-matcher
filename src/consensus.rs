@@ -502,7 +502,7 @@ mod tests {
             library_stats: ParseStats::default(),
             search: LibrarySearchParams {
                 compute: ComputeParams {
-                    metric: SimilarityMetric::CosineGreedy,
+                    metric: SimilarityMetric::LinearCosine,
                     fragment_mz_tolerance: 0.2,
                     mz_power: 0.0,
                     intensity_power: 1.0,
@@ -526,7 +526,7 @@ mod tests {
                 hits,
                 query_count: 2,
                 library_count: 3,
-                metric: SimilarityMetric::CosineGreedy,
+                metric: SimilarityMetric::LinearCosine,
                 taxonomic_reranking_applied: true,
                 taxonomic_query: Some("Withania somnifera".to_string()),
             },

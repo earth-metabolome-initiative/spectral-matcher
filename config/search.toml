@@ -10,7 +10,7 @@ min_peaks = 5
 max_peaks = 1000
 
 [jobs.search]
-metric = "CosineGreedy"
+metric = "LinearCosine"
 precursor_mz_tolerance = 0.01
 fragment_mz_tolerance = 0.01
 mz_power = 2

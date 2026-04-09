@@ -652,7 +652,7 @@ mod tests {
             ],
             query_count: 1,
             library_count: 2,
-            metric: crate::similarity::SimilarityMetric::CosineGreedy,
+            metric: crate::similarity::SimilarityMetric::LinearCosine,
             taxonomic_reranking_applied: false,
             taxonomic_query: None,
         };
@@ -703,7 +703,7 @@ mod tests {
             }],
             query_count: 1,
             library_count: 1,
-            metric: crate::similarity::SimilarityMetric::CosineGreedy,
+            metric: crate::similarity::SimilarityMetric::LinearCosine,
             taxonomic_reranking_applied: true,
             taxonomic_query: Some("Example taxon".to_string()),
         };
@@ -747,14 +747,14 @@ mod tests {
             }],
             query_count: 1,
             library_count: 1,
-            metric: crate::similarity::SimilarityMetric::CosineGreedy,
+            metric: crate::similarity::SimilarityMetric::LinearCosine,
             taxonomic_reranking_applied: false,
             taxonomic_query: None,
         };
 
         let json = export_search_json(&result, &queries, &library, SearchQueryKey::FeatureId)
             .expect("json export");
-        assert!(json.contains("\"metric\": \"CosineGreedy\""));
+        assert!(json.contains("\"metric\": \"LinearCosine\""));
         assert!(json.contains("\"hit_raw_name\": \"hit one\""));
         assert!(json.contains("\"hit_ms1_deviation_ppm\": 100000.0"));
         assert!(json.contains("\"INCHIKEY\": \"AAAA\""));

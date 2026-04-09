@@ -1503,7 +1503,7 @@ mod tests {
             queries,
             library,
             LibrarySearchParams {
-                compute: base_compute_params(SimilarityMetric::CosineGreedy),
+                compute: base_compute_params(SimilarityMetric::LinearCosine),
                 precursor_mz_tolerance: 5.0,
                 min_matched_peaks: 2,
                 min_similarity_threshold: 0.1,
@@ -1555,7 +1555,7 @@ mod tests {
                 max_peaks: 1000,
             },
             search: LibrarySearchParams {
-                compute: base_compute_params(SimilarityMetric::CosineGreedy),
+                compute: base_compute_params(SimilarityMetric::LinearCosine),
                 precursor_mz_tolerance: 0.1,
                 min_matched_peaks: 1,
                 min_similarity_threshold: 0.0,
@@ -1620,7 +1620,7 @@ mod tests {
                 max_peaks: 1000,
             },
             search: LibrarySearchParams {
-                compute: base_compute_params(SimilarityMetric::CosineGreedy),
+                compute: base_compute_params(SimilarityMetric::LinearCosine),
                 precursor_mz_tolerance: 0.1,
                 min_matched_peaks: 1,
                 min_similarity_threshold: 0.0,
@@ -1706,7 +1706,7 @@ mod tests {
             ),
             query_count: 1,
             library_count: 3,
-            metric: SimilarityMetric::CosineGreedy,
+            metric: SimilarityMetric::LinearCosine,
         };
 
         assert_eq!(
@@ -1730,7 +1730,7 @@ mod tests {
             queries,
             library,
             LibrarySearchParams {
-                compute: base_compute_params(SimilarityMetric::CosineGreedy),
+                compute: base_compute_params(SimilarityMetric::LinearCosine),
                 precursor_mz_tolerance: 0.05,
                 min_matched_peaks: 2,
                 min_similarity_threshold: 0.1,
@@ -1752,7 +1752,7 @@ mod tests {
             spectrum(11, 102.0, &[(10.0, 1.0), (20.1, 0.7), (31.0, 0.4)]),
         ];
         let params = LibrarySearchParams {
-            compute: base_compute_params(SimilarityMetric::CosineGreedy),
+            compute: base_compute_params(SimilarityMetric::LinearCosine),
             precursor_mz_tolerance: 5.0,
             min_matched_peaks: 2,
             min_similarity_threshold: 0.1,

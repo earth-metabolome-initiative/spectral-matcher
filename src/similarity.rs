@@ -5,8 +5,7 @@ use std::sync::Arc;
 use mass_spectrometry::prelude::{
     GenericSpectrum, HungarianCosine, LinearCosine, LinearEntropy, ModifiedHungarianCosine,
     ModifiedLinearCosine, ModifiedLinearEntropy, MsEntropyCleanSpectrum, ScalarSimilarity,
-    SimilarityComputationError, SiriusMergeClosePeaks, SpectralProcessor, SpectrumAlloc,
-    SpectrumMut,
+    SiriusMergeClosePeaks, SpectralProcessor, SpectrumAlloc, SpectrumMut,
 };
 use serde::{Deserialize, Serialize};
 
@@ -15,11 +14,11 @@ use crate::model::SpectrumRecord;
 /// Supported spectral-similarity metrics exposed by the matcher.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SimilarityMetric {
-    CosineHungarian,
     #[default]
-    CosineGreedy,
-    ModifiedCosine,
-    ModifiedGreedyCosine,
+    HungarianCosine,
+    LinearCosine,
+    ModifiedHungarianCosine,
+    ModifiedLinearCosine,
     LinearEntropyWeighted,
     LinearEntropyUnweighted,
     ModifiedLinearEntropyWeighted,
@@ -29,10 +28,10 @@ pub enum SimilarityMetric {
 impl SimilarityMetric {
     /// All supported metric values in CLI/API display order.
     pub const ALL: [Self; 8] = [
-        Self::CosineHungarian,
-        Self::CosineGreedy,
-        Self::ModifiedCosine,
-        Self::ModifiedGreedyCosine,
+        Self::HungarianCosine,
+        Self::LinearCosine,
+        Self::ModifiedHungarianCosine,
+        Self::ModifiedLinearCosine,
         Self::LinearEntropyWeighted,
         Self::LinearEntropyUnweighted,
         Self::ModifiedLinearEntropyWeighted,
@@ -42,10 +41,10 @@ impl SimilarityMetric {
     /// Stable string label used in configs, JSON artifacts, and CLI output.
     pub fn label(self) -> &'static str {
         match self {
-            Self::CosineHungarian => "CosineHungarian",
-            Self::CosineGreedy => "CosineGreedy",
-            Self::ModifiedCosine => "ModifiedCosine",
-            Self::ModifiedGreedyCosine => "ModifiedGreedyCosine",
+            Self::HungarianCosine => "HungarianCosine",
+            Self::LinearCosine => "LinearCosine",
+            Self::ModifiedHungarianCosine => "ModifiedHungarianCosine",
+            Self::ModifiedLinearCosine => "ModifiedLinearCosine",
             Self::LinearEntropyWeighted => "LinearEntropyWeighted",
             Self::LinearEntropyUnweighted => "LinearEntropyUnweighted",
             Self::ModifiedLinearEntropyWeighted => "ModifiedLinearEntropyWeighted",
@@ -56,17 +55,17 @@ impl SimilarityMetric {
     /// Short user-facing description of the metric.
     pub fn description(self) -> &'static str {
         match self {
-            Self::CosineHungarian => {
+            Self::HungarianCosine => {
                 "Exact cosine matching with Hungarian assignment; slower, more exhaustive."
             }
-            Self::CosineGreedy => {
-                "Fast cosine matching with greedy assignment; default choice for most runs."
+            Self::LinearCosine => {
+                "Linear-time cosine; requires well-separated peaks and returns an error otherwise."
             }
-            Self::ModifiedCosine => {
+            Self::ModifiedHungarianCosine => {
                 "Precursor-shift-aware cosine using Hungarian assignment for analog-style matching."
             }
-            Self::ModifiedGreedyCosine => {
-                "Faster precursor-shift-aware cosine using greedy assignment."
+            Self::ModifiedLinearCosine => {
+                "Linear-time precursor-shift-aware cosine; requires well-separated peaks."
             }
             Self::LinearEntropyWeighted => {
                 "Spectral entropy similarity with intensity weighting after entropy preprocessing."
@@ -112,20 +111,12 @@ pub struct ComputeParams {
 }
 
 enum MetricScorerInner {
-    CosineHungarian(HungarianCosine),
-    CosineGreedy {
-        linear: LinearCosine,
-        fallback: HungarianCosine,
-    },
-    ModifiedCosine(ModifiedHungarianCosine),
-    ModifiedGreedyCosine {
-        linear: ModifiedLinearCosine,
-        fallback: ModifiedHungarianCosine,
-    },
-    LinearEntropyWeighted(LinearEntropy),
-    LinearEntropyUnweighted(LinearEntropy),
-    ModifiedLinearEntropyWeighted(ModifiedLinearEntropy),
-    ModifiedLinearEntropyUnweighted(ModifiedLinearEntropy),
+    HungarianCosine(HungarianCosine),
+    LinearCosine(LinearCosine),
+    ModifiedHungarianCosine(ModifiedHungarianCosine),
+    ModifiedLinearCosine(ModifiedLinearCosine),
+    LinearEntropy(LinearEntropy),
+    ModifiedLinearEntropy(ModifiedLinearEntropy),
 }
 
 /// Concrete scorer wrapper that hides backend-specific matcher types.
@@ -138,86 +129,60 @@ impl MetricScorer {
     /// Builds a configured scorer for the requested metric and weighting parameters.
     pub fn new(params: ComputeParams) -> Result<Self, String> {
         let inner = match params.metric {
-            SimilarityMetric::CosineHungarian => {
+            SimilarityMetric::HungarianCosine => {
                 HungarianCosine::new(
                     params.mz_power,
                     params.intensity_power,
                     params.fragment_mz_tolerance,
                 )
-                .map(MetricScorerInner::CosineHungarian)
+                .map(MetricScorerInner::HungarianCosine)
             }
-            SimilarityMetric::CosineGreedy => {
-                match (
-                    LinearCosine::new(
-                        params.mz_power,
-                        params.intensity_power,
-                        params.fragment_mz_tolerance,
-                    ),
-                    HungarianCosine::new(
-                        params.mz_power,
-                        params.intensity_power,
-                        params.fragment_mz_tolerance,
-                    ),
-                ) {
-                    (Ok(linear), Ok(fallback)) => {
-                        Ok(MetricScorerInner::CosineGreedy { linear, fallback })
-                    }
-                    (Err(err), _) | (_, Err(err)) => Err(err),
-                }
-            }
-            SimilarityMetric::ModifiedCosine => ModifiedHungarianCosine::new(
+            SimilarityMetric::LinearCosine => LinearCosine::new(
                 params.mz_power,
                 params.intensity_power,
                 params.fragment_mz_tolerance,
             )
-            .map(MetricScorerInner::ModifiedCosine),
-            SimilarityMetric::ModifiedGreedyCosine => {
-                match (
-                    ModifiedLinearCosine::new(
-                        params.mz_power,
-                        params.intensity_power,
-                        params.fragment_mz_tolerance,
-                    ),
-                    ModifiedHungarianCosine::new(
-                        params.mz_power,
-                        params.intensity_power,
-                        params.fragment_mz_tolerance,
-                    ),
-                ) {
-                    (Ok(linear), Ok(fallback)) => {
-                        Ok(MetricScorerInner::ModifiedGreedyCosine { linear, fallback })
-                    }
-                    (Err(err), _) | (_, Err(err)) => Err(err),
-                }
-            }
+            .map(MetricScorerInner::LinearCosine),
+            SimilarityMetric::ModifiedHungarianCosine => ModifiedHungarianCosine::new(
+                params.mz_power,
+                params.intensity_power,
+                params.fragment_mz_tolerance,
+            )
+            .map(MetricScorerInner::ModifiedHungarianCosine),
+            SimilarityMetric::ModifiedLinearCosine => ModifiedLinearCosine::new(
+                params.mz_power,
+                params.intensity_power,
+                params.fragment_mz_tolerance,
+            )
+            .map(MetricScorerInner::ModifiedLinearCosine),
             SimilarityMetric::LinearEntropyWeighted => LinearEntropy::new(
                 params.mz_power,
                 params.intensity_power,
                 params.fragment_mz_tolerance,
                 true,
             )
-            .map(MetricScorerInner::LinearEntropyWeighted),
+            .map(MetricScorerInner::LinearEntropy),
             SimilarityMetric::LinearEntropyUnweighted => LinearEntropy::new(
                 params.mz_power,
                 params.intensity_power,
                 params.fragment_mz_tolerance,
                 false,
             )
-            .map(MetricScorerInner::LinearEntropyUnweighted),
+            .map(MetricScorerInner::LinearEntropy),
             SimilarityMetric::ModifiedLinearEntropyWeighted => ModifiedLinearEntropy::new(
                 params.mz_power,
                 params.intensity_power,
                 params.fragment_mz_tolerance,
                 true,
             )
-            .map(MetricScorerInner::ModifiedLinearEntropyWeighted),
+            .map(MetricScorerInner::ModifiedLinearEntropy),
             SimilarityMetric::ModifiedLinearEntropyUnweighted => ModifiedLinearEntropy::new(
                 params.mz_power,
                 params.intensity_power,
                 params.fragment_mz_tolerance,
                 false,
             )
-            .map(MetricScorerInner::ModifiedLinearEntropyUnweighted),
+            .map(MetricScorerInner::ModifiedLinearEntropy),
         }
         .map_err(|err| format!("failed to configure {}: {err:?}", params.metric.label()))?;
 
@@ -236,18 +201,12 @@ impl MetricScorer {
         right_idx: usize,
     ) -> Result<(f64, usize), String> {
         let result = match &self.inner {
-            MetricScorerInner::CosineHungarian(sim) => sim.similarity(left, right),
-            MetricScorerInner::CosineGreedy { linear, fallback } => {
-                similarity_with_spacing_fallback(linear, fallback, left, right)
-            }
-            MetricScorerInner::ModifiedCosine(sim) => sim.similarity(left, right),
-            MetricScorerInner::ModifiedGreedyCosine { linear, fallback } => {
-                similarity_with_spacing_fallback(linear, fallback, left, right)
-            }
-            MetricScorerInner::LinearEntropyWeighted(sim) => sim.similarity(left, right),
-            MetricScorerInner::LinearEntropyUnweighted(sim) => sim.similarity(left, right),
-            MetricScorerInner::ModifiedLinearEntropyWeighted(sim) => sim.similarity(left, right),
-            MetricScorerInner::ModifiedLinearEntropyUnweighted(sim) => sim.similarity(left, right),
+            MetricScorerInner::HungarianCosine(sim) => sim.similarity(left, right),
+            MetricScorerInner::LinearCosine(sim) => sim.similarity(left, right),
+            MetricScorerInner::ModifiedHungarianCosine(sim) => sim.similarity(left, right),
+            MetricScorerInner::ModifiedLinearCosine(sim) => sim.similarity(left, right),
+            MetricScorerInner::LinearEntropy(sim) => sim.similarity(left, right),
+            MetricScorerInner::ModifiedLinearEntropy(sim) => sim.similarity(left, right),
         };
         result.map_err(|err| {
             format!(
@@ -255,31 +214,6 @@ impl MetricScorer {
                 self.metric.label()
             )
         })
-    }
-}
-
-/// Runs a linear matcher first and falls back to a slower exhaustive matcher when required.
-fn similarity_with_spacing_fallback<L, F>(
-    linear: &L,
-    fallback: &F,
-    left: &GenericSpectrum,
-    right: &GenericSpectrum,
-) -> Result<(f64, usize), SimilarityComputationError>
-where
-    L: ScalarSimilarity<
-            GenericSpectrum,
-            GenericSpectrum,
-            Similarity = Result<(f64, usize), SimilarityComputationError>,
-        >,
-    F: ScalarSimilarity<
-            GenericSpectrum,
-            GenericSpectrum,
-            Similarity = Result<(f64, usize), SimilarityComputationError>,
-        >,
-{
-    match linear.similarity(left, right) {
-        Err(SimilarityComputationError::InvalidPeakSpacing(_)) => fallback.similarity(left, right),
-        other => other,
     }
 }
 
@@ -402,7 +336,7 @@ mod tests {
         let processed = preprocess_spectra_for_metric(
             spectra,
             ComputeParams {
-                metric: SimilarityMetric::CosineGreedy,
+                metric: SimilarityMetric::LinearCosine,
                 fragment_mz_tolerance: 0.2,
                 mz_power: 0.0,
                 intensity_power: 1.0,
@@ -412,7 +346,7 @@ mod tests {
         .expect("preprocess");
         let reference = record(1, &[(10.0, 1.0), (30.0, 0.8)]);
         let scorer = MetricScorer::new(ComputeParams {
-            metric: SimilarityMetric::CosineGreedy,
+            metric: SimilarityMetric::LinearCosine,
             fragment_mz_tolerance: 0.2,
             mz_power: 0.0,
             intensity_power: 1.0,
@@ -434,11 +368,11 @@ mod tests {
     }
 
     #[test]
-    fn cosine_greedy_falls_back_when_peak_spacing_is_too_tight_for_linear_cosine() {
+    fn linear_cosine_surfaces_invalid_peak_spacing() {
         let left = record(0, &[(10.0, 1.0), (10.15, 0.5)]);
         let right = record(1, &[(10.0, 1.0), (10.15, 0.5)]);
         let scorer = MetricScorer::new(ComputeParams {
-            metric: SimilarityMetric::CosineGreedy,
+            metric: SimilarityMetric::LinearCosine,
             fragment_mz_tolerance: 0.1,
             mz_power: 0.0,
             intensity_power: 1.0,
@@ -446,20 +380,18 @@ mod tests {
         })
         .expect("scorer");
 
-        let (score, matches) = scorer
+        let err = scorer
             .similarity(left.spectrum.as_ref(), right.spectrum.as_ref(), 0, 1)
-            .expect("fallback similarity");
-
-        assert_eq!(matches, 2);
-        assert!((score - 1.0).abs() < 1e-9);
+            .expect_err("invalid spacing should error");
+        assert!(err.contains("LinearCosine failed"));
     }
 
     #[test]
-    fn modified_greedy_falls_back_when_peak_spacing_is_too_tight_for_linear_cosine() {
+    fn modified_linear_cosine_surfaces_invalid_peak_spacing() {
         let left = record(0, &[(10.0, 1.0), (10.15, 0.5)]);
         let right = record(1, &[(10.0, 1.0), (10.15, 0.5)]);
         let scorer = MetricScorer::new(ComputeParams {
-            metric: SimilarityMetric::ModifiedGreedyCosine,
+            metric: SimilarityMetric::ModifiedLinearCosine,
             fragment_mz_tolerance: 0.1,
             mz_power: 0.0,
             intensity_power: 1.0,
@@ -467,11 +399,9 @@ mod tests {
         })
         .expect("scorer");
 
-        let (score, matches) = scorer
+        let err = scorer
             .similarity(left.spectrum.as_ref(), right.spectrum.as_ref(), 0, 1)
-            .expect("fallback similarity");
-
-        assert_eq!(matches, 2);
-        assert!((score - 1.0).abs() < 1e-9);
+            .expect_err("invalid spacing should error");
+        assert!(err.contains("ModifiedLinearCosine failed"));
     }
 }

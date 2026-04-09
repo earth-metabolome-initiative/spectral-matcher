@@ -60,7 +60,7 @@ fn write_search_artifact(
         library_stats: ParseStats::default(),
         search: LibrarySearchParams {
             compute: ComputeParams {
-                metric: SimilarityMetric::CosineGreedy,
+                metric: SimilarityMetric::LinearCosine,
                 fragment_mz_tolerance: 0.2,
                 mz_power: 0.0,
                 intensity_power: 1.0,
@@ -79,7 +79,7 @@ fn write_search_artifact(
             hits,
             query_count: 1,
             library_count: 2,
-            metric: SimilarityMetric::CosineGreedy,
+            metric: SimilarityMetric::LinearCosine,
             taxonomic_reranking_applied: true,
             taxonomic_query: Some("Withania somnifera".to_string()),
         },
@@ -136,8 +136,8 @@ fn metrics_cli_lists_available_metrics() {
     assert!(output.status.success(), "{output:?}");
     let stdout = String::from_utf8(output.stdout).expect("utf8 stdout");
     assert!(stdout.contains("Available similarity metrics:"));
-    assert!(stdout.contains("CosineGreedy (default)"));
-    assert!(stdout.contains("ModifiedCosine"));
+    assert!(stdout.contains("HungarianCosine (default)"));
+    assert!(stdout.contains("ModifiedHungarianCosine"));
     assert!(stdout.contains("LinearEntropyWeighted"));
 }
 
@@ -169,7 +169,7 @@ min_peaks = 1
 max_peaks = 1000
 
 [jobs.search]
-metric = "CosineGreedy"
+metric = "LinearCosine"
 precursor_mz_tolerance = 1.0
 fragment_mz_tolerance = 0.2
 mz_power = 0.0
@@ -226,7 +226,7 @@ min_peaks = 1
 max_peaks = 1000
 
 [jobs.search]
-metric = "CosineGreedy"
+metric = "LinearCosine"
 precursor_mz_tolerance = 1.0
 fragment_mz_tolerance = 0.2
 mz_power = 0.0
@@ -246,7 +246,7 @@ min_peaks = 1
 max_peaks = 1000
 
 [jobs.search]
-metric = "CosineGreedy"
+metric = "LinearCosine"
 precursor_mz_tolerance = 1.0
 fragment_mz_tolerance = 0.2
 mz_power = 0.0
@@ -325,7 +325,7 @@ min_peaks = 1
 max_peaks = 1000
 
 [jobs.search]
-metric = "CosineGreedy"
+metric = "LinearCosine"
 precursor_mz_tolerance = 0.1
 fragment_mz_tolerance = 0.2
 mz_power = 0.0
@@ -530,7 +530,7 @@ min_peaks = 1
 max_peaks = 1000
 
 [jobs.build.compute]
-metric = "CosineGreedy"
+metric = "LinearCosine"
 fragment_mz_tolerance = 0.2
 mz_power = 0.0
 intensity_power = 1.0
