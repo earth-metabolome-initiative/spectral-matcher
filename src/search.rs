@@ -1,3 +1,5 @@
+//! Search and network workflows built on top of parsed spectra and similarity scoring.
+
 #[cfg(not(target_arch = "wasm32"))]
 use std::cmp::Reverse;
 #[cfg(not(target_arch = "wasm32"))]
@@ -38,15 +40,22 @@ use crate::network::{SelectedNeighbor, build_network_from_selected_neighbors};
 use crate::similarity::{ComputeParams, MetricScorer, preprocess_spectra_for_metric};
 use crate::taxonomy::{LotusMetadataIndex, ResolvedLotusQuery, short_inchikey_from_record};
 
+/// Parameters controlling library-search filtering and final ranking.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct LibrarySearchParams {
+    /// Fragment-level similarity parameters.
     pub compute: ComputeParams,
+    /// Maximum allowed precursor m/z deviation in Dalton for candidate prefiltering.
     pub precursor_mz_tolerance: f64,
+    /// Minimum number of matched fragment peaks required for a hit to survive.
     pub min_matched_peaks: usize,
+    /// Minimum spectral similarity score required for a hit to survive.
     pub min_similarity_threshold: f64,
+    /// Maximum number of final hits retained per query after any reranking.
     pub top_n: usize,
 }
 
+/// Messages produced by the background native search worker.
 #[derive(Debug)]
 pub enum SearchMessage {
     Finished(SearchResult),
@@ -54,6 +63,7 @@ pub enum SearchMessage {
     Failed(String),
 }
 
+/// Handle used to poll progress from a background native search.
 pub struct NativeSearchHandle {
     total: usize,
     done: Arc<AtomicUsize>,
@@ -62,18 +72,22 @@ pub struct NativeSearchHandle {
 }
 
 impl NativeSearchHandle {
+    /// Returns the total number of query/library pairs to evaluate.
     pub fn total(&self) -> usize {
         self.total
     }
 
+    /// Returns the number of pairs processed so far.
     pub fn done(&self) -> usize {
         self.done.load(Ordering::Relaxed)
     }
 
+    /// Requests cancellation of the background search.
     pub fn cancel(&self) {
         self.cancel.store(true, Ordering::Relaxed);
     }
 
+    /// Non-blocking poll for a completed search result.
     pub fn try_recv(&self) -> Option<SearchMessage> {
         self.rx.try_recv().ok()
     }
@@ -158,10 +172,12 @@ fn mgf_cache() -> &'static Mutex<HashMap<PathBuf, CachedMgf>> {
     CACHE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+/// Returns the total number of query/library comparisons for a search job.
 pub fn total_search_pairs(query_count: usize, library_count: usize) -> usize {
     query_count.saturating_mul(library_count)
 }
 
+/// Returns the number of unique pair slots in an upper-triangular all-vs-all matrix.
 pub fn total_pairs(count: usize) -> usize {
     count.saturating_mul(count.saturating_add(1)) / 2
 }
@@ -171,6 +187,7 @@ fn total_network_pairs(count: usize) -> usize {
     count.saturating_mul(count.saturating_sub(1)) / 2
 }
 
+/// Loads LOTUS metadata and resolves the requested query lineage.
 fn load_search_taxonomy_config(
     request: &crate::api::SearchTaxonomyRequest,
 ) -> Result<SearchTaxonomyConfig, String> {
@@ -204,6 +221,7 @@ fn load_search_taxonomy_config(
     Ok(SearchTaxonomyConfig { lotus, query })
 }
 
+/// Expands the intermediate candidate budget when taxonomy reranking is enabled.
 fn effective_search_params(
     params: &LibrarySearchParams,
     library_count: usize,
@@ -216,6 +234,7 @@ fn effective_search_params(
     effective
 }
 
+/// Runs a direct library search without artifact enrichment or progress callbacks.
 pub fn search_library(
     queries: Vec<SpectrumRecord>,
     library: Vec<SpectrumRecord>,
@@ -263,6 +282,7 @@ pub fn search_library(
     }
 }
 
+/// Builds a network artifact from a request without surfacing progress.
 pub fn build_network_artifact(request: NetworkRequest) -> Result<NetworkArtifact, String> {
     #[cfg(not(target_arch = "wasm32"))]
     {
@@ -313,6 +333,7 @@ pub fn build_network_artifact(request: NetworkRequest) -> Result<NetworkArtifact
     }
 }
 
+/// Runs a search request without surfacing progress.
 pub fn run_search_request(request: SearchRequest) -> Result<SearchArtifact, String> {
     #[cfg(not(target_arch = "wasm32"))]
     {
@@ -379,6 +400,7 @@ pub fn run_search_request(request: SearchRequest) -> Result<SearchArtifact, Stri
     }
 }
 
+/// Builds a network artifact while reporting stage progress.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn build_network_artifact_with_progress<F>(
     request: NetworkRequest,
@@ -444,6 +466,7 @@ where
     })
 }
 
+/// Runs a search request while reporting stage progress.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn run_search_request_with_progress<F>(
     request: SearchRequest,
@@ -577,6 +600,7 @@ fn load_request_spectra(
     Err("request did not provide an MGF source".to_string())
 }
 
+/// Loads request spectra with stage-aware progress reporting in native builds.
 #[cfg(not(target_arch = "wasm32"))]
 fn load_request_spectra_with_progress<F>(
     stage: JobProgressStage,
@@ -610,6 +634,7 @@ where
     Err("request did not provide an MGF source".to_string())
 }
 
+/// Loads an MGF file through the native cache while streaming byte progress to the caller.
 #[cfg(not(target_arch = "wasm32"))]
 fn load_mgf_path_cached_with_progress<F>(
     path: &Path,
@@ -664,6 +689,7 @@ where
     }
 }
 
+/// Computes a lightweight file fingerprint used by the native MGF cache.
 #[cfg(not(target_arch = "wasm32"))]
 fn file_fingerprint(path: &Path) -> Result<FileFingerprint, String> {
     let metadata =
@@ -679,6 +705,7 @@ fn file_fingerprint(path: &Path) -> Result<FileFingerprint, String> {
     })
 }
 
+/// Starts a background native search worker over already-loaded query and library spectra.
 pub fn start_native_search(
     queries: Vec<SpectrumRecord>,
     library: Vec<SpectrumRecord>,
@@ -937,6 +964,7 @@ fn search_candidates(
     Ok(candidates)
 }
 
+/// Scores every query/library pair in parallel, applying candidate prefilters first.
 #[cfg(not(target_arch = "wasm32"))]
 fn score_query_library_pairs(
     queries: &[SpectrumRecord],
@@ -1014,6 +1042,7 @@ fn score_query_library_pairs(
     Ok(Some(finalize_search_candidates(candidates, params.top_n)))
 }
 
+/// Scores all unique spectrum pairs serially.
 #[cfg(target_arch = "wasm32")]
 fn score_all_pairs(
     spectra: &[SpectrumRecord],
@@ -1036,6 +1065,7 @@ fn score_all_pairs(
     Ok(pairs)
 }
 
+/// Scores network neighbors in parallel while maintaining a bounded neighbor heap per node.
 #[cfg(not(target_arch = "wasm32"))]
 fn score_network_neighbors_parallel(
     spectra: &[SpectrumRecord],
@@ -1131,6 +1161,7 @@ fn score_network_neighbors_parallel(
         .collect())
 }
 
+/// Pushes a candidate into a bounded max-heap used for top-k neighbor retention.
 #[cfg(not(target_arch = "wasm32"))]
 fn push_ranked_neighbor(
     heap: &mut BinaryHeap<Reverse<RankedNeighbor>>,
@@ -1148,11 +1179,13 @@ fn push_ranked_neighbor(
     }
 }
 
+/// Chooses how often long-running scoring loops emit progress updates.
 #[cfg(not(target_arch = "wasm32"))]
 fn progress_report_every(total: usize) -> usize {
     (total / 1000).max(10_000)
 }
 
+/// Converts a bounded ranking heap into a sorted selected-neighbor list.
 #[cfg(not(target_arch = "wasm32"))]
 fn ranked_heap_to_selected_neighbors(
     heap: Mutex<BinaryHeap<Reverse<RankedNeighbor>>>,
@@ -1178,10 +1211,12 @@ fn ranked_heap_to_selected_neighbors(
         .collect()
 }
 
+/// Returns whether a scored candidate satisfies match-count and score thresholds.
 fn search_match_passes(score: f64, matches: usize, params: &LibrarySearchParams) -> bool {
     matches >= params.min_matched_peaks && score >= params.min_similarity_threshold
 }
 
+/// Returns whether a library candidate satisfies precursor m/z prefiltering.
 fn search_precursor_mz_passes(
     query: &SpectrumRecord,
     library: &SpectrumRecord,
@@ -1190,6 +1225,7 @@ fn search_precursor_mz_passes(
     (query.meta.precursor_mz - library.meta.precursor_mz).abs() <= params.precursor_mz_tolerance
 }
 
+/// Finalizes ranked candidate hits, keeping only the best `top_n` per query.
 fn finalize_search_candidates(candidates: Vec<SearchCandidate>, top_n: usize) -> Vec<CandidateHit> {
     let mut by_query: Vec<Vec<SearchCandidate>> = Vec::new();
     for candidate in candidates {
@@ -1222,6 +1258,7 @@ fn finalize_search_candidates(candidates: Vec<SearchCandidate>, top_n: usize) ->
     hits
 }
 
+/// Builds the enriched search artifact result, optionally applying taxonomic reranking.
 fn build_search_artifact_result(
     base: SearchResult,
     queries: &[SpectrumRecord],
@@ -1240,6 +1277,7 @@ fn build_search_artifact_result(
     }
 }
 
+/// Enriches base search hits with deviation and optional taxonomy metadata.
 fn enrich_search_hits(
     base_hits: Vec<CandidateHit>,
     queries: &[SpectrumRecord],
@@ -1282,6 +1320,7 @@ fn enrich_search_hits(
     }
 }
 
+/// Combines a base spectral hit with optional taxonomic metadata.
 fn build_search_candidate(
     hit: &CandidateHit,
     library: &[SpectrumRecord],
@@ -1328,6 +1367,7 @@ fn build_search_candidate(
     }
 }
 
+/// Finalizes enriched search candidates into exported hit rows.
 fn finalize_search_artifact_candidates(
     candidates: Vec<SearchCandidate>,
     queries: &[SpectrumRecord],
@@ -1377,6 +1417,7 @@ fn finalize_search_artifact_candidates(
     hits
 }
 
+/// Computes precursor deviation in parts per million using query m/z as the denominator.
 fn ms1_deviation_ppm(query_precursor_mz: f64, candidate_precursor_mz: f64) -> f64 {
     if !query_precursor_mz.is_finite() || query_precursor_mz == 0.0 {
         return 0.0;
@@ -1384,6 +1425,7 @@ fn ms1_deviation_ppm(query_precursor_mz: f64, candidate_precursor_mz: f64) -> f6
     ((candidate_precursor_mz - query_precursor_mz) / query_precursor_mz) * 1_000_000.0
 }
 
+/// Ordering used for taxonomically reranked candidates.
 fn search_candidate_order(left: &SearchCandidate, right: &SearchCandidate) -> std::cmp::Ordering {
     right
         .combined_score

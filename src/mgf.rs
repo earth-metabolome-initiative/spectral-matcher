@@ -1,3 +1,5 @@
+//! MGF parsing and native/wasm loading helpers.
+
 use std::collections::BTreeMap;
 use std::io::{BufRead, Cursor};
 #[cfg(not(target_arch = "wasm32"))]
@@ -27,12 +29,14 @@ struct ParsedSpectrum {
     peaks: Vec<(f64, f64)>,
 }
 
+/// Messages produced by the native threaded MGF loader.
 #[cfg(not(target_arch = "wasm32"))]
 pub enum NativeLoadMessage {
     Finished(LoadedSpectra),
     Failed(String),
 }
 
+/// Handle used to poll progress from the native threaded MGF loader.
 #[cfg(not(target_arch = "wasm32"))]
 pub struct NativeLoadHandle {
     total_bytes: u64,
@@ -44,27 +48,33 @@ pub struct NativeLoadHandle {
 
 #[cfg(not(target_arch = "wasm32"))]
 impl NativeLoadHandle {
+    /// Returns the total size of the input file in bytes.
     pub fn total_bytes(&self) -> u64 {
         self.total_bytes
     }
 
+    /// Returns the latest processed byte count reported by the parser thread.
     pub fn processed_bytes(&self) -> u64 {
         self.processed_bytes.load(Ordering::Relaxed)
     }
 
+    /// Returns the number of accepted spectra seen so far.
     pub fn accepted(&self) -> usize {
         self.accepted.load(Ordering::Relaxed)
     }
 
+    /// Returns the number of `BEGIN IONS` blocks seen so far.
     pub fn ions_blocks(&self) -> usize {
         self.ions_blocks.load(Ordering::Relaxed)
     }
 
+    /// Non-blocking poll for a completed load result.
     pub fn try_recv(&self) -> Option<NativeLoadMessage> {
         self.rx.try_recv().ok()
     }
 }
 
+/// Loads and parses an MGF file from disk.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn load_mgf_path(
     path: &Path,
@@ -84,6 +94,7 @@ pub fn load_mgf_path(
     })
 }
 
+/// Starts a background MGF load and exposes progress through a [`NativeLoadHandle`].
 #[cfg(not(target_arch = "wasm32"))]
 pub fn start_native_mgf_load(
     path: &Path,
@@ -154,6 +165,7 @@ pub fn start_native_mgf_load(
     })
 }
 
+/// Loads and parses MGF data from in-memory bytes.
 pub fn load_mgf_bytes(
     source_label: &str,
     bytes: &[u8],
@@ -169,6 +181,7 @@ pub fn load_mgf_bytes(
     })
 }
 
+/// Starts a browser-side file load for wasm callers.
 #[cfg(target_arch = "wasm32")]
 pub fn load_mgf_file_for_wasm(
     source_label: &str,
@@ -188,6 +201,7 @@ pub fn load_mgf_file_for_wasm(
     }))
 }
 
+/// Parses an MGF reader without surfacing intermediate progress.
 fn parse_mgf_reader_local<R: BufRead>(
     reader: R,
     min_peaks: usize,
@@ -196,6 +210,7 @@ fn parse_mgf_reader_local<R: BufRead>(
     parse_mgf_reader_local_with_progress(reader, min_peaks, max_peaks, |_, _| {})
 }
 
+/// Parses an MGF reader while reporting processed-byte progress.
 fn parse_mgf_reader_local_with_progress<R: BufRead, F: FnMut(u64, ParseStats)>(
     mut reader: R,
     min_peaks: usize,

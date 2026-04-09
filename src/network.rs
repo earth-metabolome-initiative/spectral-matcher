@@ -1,9 +1,12 @@
+//! Spectral-network graph assembly and filtering helpers.
+
 use std::collections::{HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 
 use crate::model::SpectrumMetadata;
 
+/// Node metadata exported for a spectral-network graph.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct NetworkNode {
     pub id: usize,
@@ -20,6 +23,7 @@ pub struct NetworkNode {
     pub degree: usize,
 }
 
+/// Edge connecting two nodes in a spectral network.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct NetworkEdge {
     pub source: usize,
@@ -28,6 +32,7 @@ pub struct NetworkEdge {
     pub matches: usize,
 }
 
+/// Fully assembled spectral-network graph plus component metadata.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SpectralNetwork {
     pub nodes: Vec<NetworkNode>,
@@ -36,6 +41,7 @@ pub struct SpectralNetwork {
     pub largest_component_id: Option<usize>,
 }
 
+/// Subset selection used when projecting a network for display.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ComponentSelection {
     All,
@@ -44,6 +50,7 @@ pub enum ComponentSelection {
 }
 
 impl SpectralNetwork {
+    /// Returns the node ids visible under the requested component selection.
     pub fn visible_node_ids(&self, selection: ComponentSelection) -> Vec<usize> {
         match selection {
             ComponentSelection::All => self.nodes.iter().map(|n| n.id).collect(),
@@ -66,10 +73,12 @@ impl SpectralNetwork {
         }
     }
 
+    /// Returns the visible node ids as a set for efficient edge filtering.
     pub fn visible_node_set(&self, selection: ComponentSelection) -> HashSet<usize> {
         self.visible_node_ids(selection).into_iter().collect()
     }
 
+    /// Returns the network edges that connect only visible nodes.
     pub fn visible_edges(&self, selection: ComponentSelection) -> Vec<&NetworkEdge> {
         let visible = self.visible_node_set(selection);
         self.edges
@@ -79,6 +88,7 @@ impl SpectralNetwork {
     }
 }
 
+/// Pairwise similarity result used while assembling a network from scored spectra.
 #[derive(Clone, Debug)]
 pub struct PairScore {
     pub left: usize,
@@ -87,6 +97,7 @@ pub struct PairScore {
     pub matches: usize,
 }
 
+/// Preselected neighbor entry used by the parallel network builder.
 #[derive(Clone, Debug)]
 pub struct SelectedNeighbor {
     pub neighbor: usize,
@@ -94,6 +105,7 @@ pub struct SelectedNeighbor {
     pub matches: usize,
 }
 
+/// Builds a spectral network from a flat list of scored spectrum pairs.
 pub fn build_network(
     metas: &[SpectrumMetadata],
     scores: &[PairScore],
@@ -146,6 +158,7 @@ pub fn build_network(
     assemble_network(metas, edges)
 }
 
+/// Builds a spectral network from per-node selected-neighbor lists.
 pub fn build_network_from_selected_neighbors(
     metas: &[SpectrumMetadata],
     selected_neighbors: &[Vec<SelectedNeighbor>],

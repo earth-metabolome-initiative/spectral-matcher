@@ -1,9 +1,9 @@
+output_dir = "/Users/pma/git_repos/EMI/spectral-matcher/out"
+
 [[jobs]]
-name = "mapp_vs_isdb_lotus"
+name = "mapp_vs_gnps_lotus"
 query_mgf = "/Users/pma/git_repos/EMI/spectral-matcher/fixtures/mapp_batch_00231.mgf"
-library_mgf = "/Users/pma/01_large_files/mgf/isdb_lotus_pos_energySum.mgf"
-output_json = "/Users/pma/git_repos/EMI/spectral-matcher/out/mapp_vs_isdb_lotus/search.json"
-output_tsv = "/Users/pma/git_repos/EMI/spectral-matcher/out/mapp_vs_isdb_lotus/search.tsv"
+library_mgf = "/Users/pma/01_large_files/mgf/matchms.mgf"
 
 [jobs.parse]
 min_peaks = 5
@@ -25,4 +25,3 @@ lotus_csv = "/Users/pma/01_large_files/lotus/230106_frozen_metadata.csv"
 
 [jobs.output]
 query_key = "FeatureId"
-

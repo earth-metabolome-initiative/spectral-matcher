@@ -1,8 +1,8 @@
+output_dir = "/Users/pma/git_repos/EMI/spectral-matcher/out"
+
 [[jobs]]
 name = "mapp_batch_00231"
 input_mgf = "/Users/pma/git_repos/EMI/spectral-matcher/fixtures/mapp_batch_00231.mgf"
-output_json = "/Users/pma/git_repos/EMI/spectral-matcher/out/mapp_batch_00231/network.json"
-output_csv_dir = "/Users/pma/git_repos/EMI/spectral-matcher/out/mapp_batch_00231/csv"
 
 [jobs.parse]
 min_peaks = 5

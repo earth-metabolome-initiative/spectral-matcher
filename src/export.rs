@@ -1,3 +1,5 @@
+//! TSV and JSON export helpers for search results and browser downloads.
+
 use std::collections::BTreeSet;
 
 use serde::Serialize;
@@ -5,6 +7,7 @@ use serde::Serialize;
 use crate::api::SearchArtifactResult;
 use crate::model::SpectrumRecord;
 
+/// Query identifier column used in TSV/JSON exports.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, serde::Deserialize)]
 pub enum SearchQueryKey {
     FeatureId,
@@ -16,6 +19,7 @@ pub enum SearchQueryKey {
 }
 
 impl SearchQueryKey {
+    /// All supported query identifier modes in display order.
     pub const ALL: [Self; 6] = [
         Self::FeatureId,
         Self::FeaturelistFeatureId,
@@ -25,6 +29,7 @@ impl SearchQueryKey {
         Self::NodeId,
     ];
 
+    /// Stable export label used in TSV/JSON payloads.
     pub fn label(self) -> &'static str {
         match self {
             Self::FeatureId => "FEATURE_ID",
@@ -36,6 +41,7 @@ impl SearchQueryKey {
         }
     }
 
+    /// Returns the identifier value for the selected query-key mode.
     pub fn value_for<T>(self, record: &SpectrumRecord<T>) -> String {
         match self {
             Self::FeatureId => record.meta.feature_id.clone().unwrap_or_default(),
@@ -52,6 +58,7 @@ impl SearchQueryKey {
     }
 }
 
+/// Renders a search artifact as a TSV table suitable for spreadsheet-style workflows.
 pub fn export_search_tsv<TQ, TL>(
     result: &SearchArtifactResult,
     queries: &[SpectrumRecord<TQ>],
@@ -193,6 +200,7 @@ struct JsonSearchRow {
     hit_attributes: std::collections::BTreeMap<String, String>,
 }
 
+/// Renders a search artifact as a row-oriented JSON export.
 pub fn export_search_json<TQ, TL>(
     result: &SearchArtifactResult,
     queries: &[SpectrumRecord<TQ>],
@@ -243,6 +251,7 @@ pub fn export_search_json<TQ, TL>(
     .map_err(|err| format!("failed to serialize JSON export: {err}"))
 }
 
+/// Writes TSV contents to disk, creating parent directories when needed.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn save_tsv_to_path(path: &std::path::Path, contents: &str) -> Result<(), String> {
     if let Some(parent) = path.parent()
@@ -255,6 +264,7 @@ pub fn save_tsv_to_path(path: &std::path::Path, contents: &str) -> Result<(), St
         .map_err(|err| format!("failed to write {}: {err}", path.display()))
 }
 
+/// Writes JSON contents to disk, creating parent directories when needed.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn save_json_to_path(path: &std::path::Path, contents: &str) -> Result<(), String> {
     if let Some(parent) = path.parent()
@@ -267,6 +277,7 @@ pub fn save_json_to_path(path: &std::path::Path, contents: &str) -> Result<(), S
         .map_err(|err| format!("failed to write {}: {err}", path.display()))
 }
 
+/// Downloads a generated TSV file in the browser.
 #[cfg(target_arch = "wasm32")]
 pub fn download_tsv_file(filename: &str, contents: &str) -> Result<(), String> {
     download_one(

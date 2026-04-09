@@ -1,11 +1,21 @@
+//! Curated spectral-database registry and native download helpers.
+
+/// Describes a downloadable spectral database exposed by the CLI.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SpectralDatabase {
+    /// Stable CLI identifier.
     pub id: &'static str,
+    /// User-facing display name.
     pub name: &'static str,
+    /// Default output filename.
     pub filename: &'static str,
+    /// Source URL used for downloading.
     pub url: &'static str,
+    /// High-level database category such as experimental or in silico.
     pub category: &'static str,
+    /// Short dimensionality or coverage label.
     pub dimensions: &'static str,
+    /// Human-readable description shown by `db list`.
     pub description: &'static str,
 }
 
@@ -39,10 +49,12 @@ const SPECTRAL_DATABASES: [SpectralDatabase; 3] = [
     },
 ];
 
+/// Returns the built-in curated spectral database registry.
 pub fn spectral_databases() -> &'static [SpectralDatabase] {
     &SPECTRAL_DATABASES
 }
 
+/// Resolves a database by id, display name, or filename.
 pub fn resolve_spectral_database(input: &str) -> Option<&'static SpectralDatabase> {
     let needle = normalize_label(input);
     spectral_databases().iter().find(|database| {
@@ -67,6 +79,7 @@ fn normalize_label(input: &str) -> String {
     out.trim_matches('_').to_string()
 }
 
+/// Downloads a curated spectral database into `output_dir`, reporting byte progress as data arrives.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn download_spectral_database<F>(
     database: &SpectralDatabase,

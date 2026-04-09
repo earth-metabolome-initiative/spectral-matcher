@@ -63,11 +63,11 @@ By default the service binds to `127.0.0.1:8787`.
 Use a config file like this:
 
 ```toml
+output_dir = "out"
+
 [[jobs]]
 name = "mapp_batch_00231"
 input_mgf = "fixtures/mapp_batch_00231.mgf"
-output_json = "out/mapp_batch_00231/network.json"
-output_csv_dir = "out/mapp_batch_00231/csv"
 
 [jobs.parse]
 min_peaks = 5
@@ -96,6 +96,8 @@ Outputs:
 - `out/mapp_batch_00231/csv/nodes.csv`
 - `out/mapp_batch_00231/csv/edges.csv`
 
+With `output_dir = "out"`, the CLI derives output locations from each job `name`. For network jobs it writes `<output_dir>/<name>/network.json` and `<output_dir>/<name>/csv/`.
+
 Notes:
 
 - `threshold` is the minimum similarity score required to keep an edge.
@@ -123,12 +125,12 @@ For your current setup, use:
 Example config:
 
 ```toml
+output_dir = "out"
+
 [[jobs]]
 name = "mapp_vs_isdb_lotus"
 query_mgf = "fixtures/mapp_batch_00231.mgf"
 library_mgf = "/Users/pma/01_large_files/mgf/isdb_lotus_pos_energySum.mgf"
-output_json = "out/mapp_vs_isdb_lotus/search.json"
-output_tsv = "out/mapp_vs_isdb_lotus/search.tsv"
 
 [jobs.parse]
 min_peaks = 5
@@ -158,6 +160,10 @@ Outputs:
 
 - `out/mapp_vs_isdb_lotus/search.json`
 - `out/mapp_vs_isdb_lotus/search.tsv`
+
+With `output_dir = "out"`, the CLI derives search outputs as `<output_dir>/<name>/search.json` and `<output_dir>/<name>/search.tsv`.
+
+If you need custom locations, you can still set explicit `output_json`, `output_tsv`, or `output_csv_dir` fields on individual jobs.
 
 The TSV uses a compact query identity schema:
 

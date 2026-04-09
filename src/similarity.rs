@@ -1,3 +1,5 @@
+//! Similarity metric configuration, scorer construction, and metric-specific preprocessing.
+
 use std::sync::Arc;
 
 use mass_spectrometry::prelude::{
@@ -10,6 +12,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::model::SpectrumRecord;
 
+/// Supported spectral-similarity metrics exposed by the matcher.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SimilarityMetric {
     CosineHungarian,
@@ -24,6 +27,7 @@ pub enum SimilarityMetric {
 }
 
 impl SimilarityMetric {
+    /// All supported metric values in CLI/API display order.
     pub const ALL: [Self; 8] = [
         Self::CosineHungarian,
         Self::CosineGreedy,
@@ -35,6 +39,7 @@ impl SimilarityMetric {
         Self::ModifiedLinearEntropyUnweighted,
     ];
 
+    /// Stable string label used in configs, JSON artifacts, and CLI output.
     pub fn label(self) -> &'static str {
         match self {
             Self::CosineHungarian => "CosineHungarian",
@@ -48,6 +53,7 @@ impl SimilarityMetric {
         }
     }
 
+    /// Short user-facing description of the metric.
     pub fn description(self) -> &'static str {
         match self {
             Self::CosineHungarian => {
@@ -77,6 +83,7 @@ impl SimilarityMetric {
         }
     }
 
+    /// Returns whether the metric requires entropy-specific spectrum cleanup before scoring.
     fn needs_linear_entropy_preprocessing(self) -> bool {
         matches!(
             self,
@@ -88,12 +95,18 @@ impl SimilarityMetric {
     }
 }
 
+/// Parameters controlling fragment-level similarity computation.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 pub struct ComputeParams {
+    /// Similarity metric used for scoring.
     pub metric: SimilarityMetric,
+    /// Fragment m/z matching tolerance in Dalton.
     pub fragment_mz_tolerance: f64,
+    /// Exponent applied to m/z while weighting peaks.
     pub mz_power: f64,
+    /// Exponent applied to intensity while weighting peaks.
     pub intensity_power: f64,
+    /// Optional cap on the number of peaks retained for similarity computation only.
     #[serde(default)]
     pub top_n_peaks: Option<usize>,
 }
@@ -115,12 +128,14 @@ enum MetricScorerInner {
     ModifiedLinearEntropyUnweighted(ModifiedLinearEntropy),
 }
 
+/// Concrete scorer wrapper that hides backend-specific matcher types.
 pub struct MetricScorer {
     metric: SimilarityMetric,
     inner: MetricScorerInner,
 }
 
 impl MetricScorer {
+    /// Builds a configured scorer for the requested metric and weighting parameters.
     pub fn new(params: ComputeParams) -> Result<Self, String> {
         let inner = match params.metric {
             SimilarityMetric::CosineHungarian => {
@@ -212,6 +227,7 @@ impl MetricScorer {
         })
     }
 
+    /// Computes a similarity score and matched-peak count for a spectrum pair.
     pub fn similarity(
         &self,
         left: &GenericSpectrum,
@@ -242,6 +258,7 @@ impl MetricScorer {
     }
 }
 
+/// Runs a linear matcher first and falls back to a slower exhaustive matcher when required.
 fn similarity_with_spacing_fallback<L, F>(
     linear: &L,
     fallback: &F,
@@ -266,6 +283,7 @@ where
     }
 }
 
+/// Applies any metric-specific preprocessing needed before scoring starts.
 pub fn preprocess_spectra_for_metric<T>(
     spectra: Vec<SpectrumRecord<T>>,
     params: ComputeParams,
@@ -293,6 +311,7 @@ pub fn preprocess_spectra_for_metric<T>(
         .collect())
 }
 
+/// Applies an optional top-N-by-intensity filter to spectra used for scoring.
 fn apply_top_n_peak_filter<T>(
     spectra: Vec<SpectrumRecord<T>>,
     top_n_peaks: Option<usize>,

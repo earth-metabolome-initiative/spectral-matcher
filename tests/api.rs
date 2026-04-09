@@ -1,4 +1,5 @@
 #![cfg(not(target_arch = "wasm32"))]
+//! Integration tests covering the HTTP API surface.
 
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -9,6 +10,7 @@ use spectral_matcher::{
     NetworkBuildParams, NetworkRequest, ParseConfig, SearchRequest, SimilarityMetric,
 };
 
+/// Reserves an ephemeral localhost port for a test server instance.
 fn free_port() -> u16 {
     TcpListener::bind("127.0.0.1:0")
         .expect("bind temp listener")
@@ -17,6 +19,7 @@ fn free_port() -> u16 {
         .port()
 }
 
+/// Starts the matcher server in a background thread and waits for readiness.
 fn start_server() -> String {
     let port = free_port();
     let bind = format!("127.0.0.1:{port}");
@@ -37,6 +40,7 @@ fn start_server() -> String {
     panic!("server failed to start");
 }
 
+/// Sends a raw JSON HTTP request to the test server and deserializes the response body.
 fn request_json<T: serde::de::DeserializeOwned>(
     base_url: &str,
     method: &str,
@@ -78,6 +82,7 @@ fn request_json<T: serde::de::DeserializeOwned>(
     serde_json::from_slice(&response[split + 4..]).map_err(|err| err.to_string())
 }
 
+/// Verifies the health and synchronous network endpoints against a tiny fixture payload.
 #[test]
 fn health_and_sync_network_endpoints_work() {
     let url = start_server();
@@ -114,6 +119,7 @@ fn health_and_sync_network_endpoints_work() {
     assert_eq!(artifact.network.nodes.len(), 2);
 }
 
+/// Verifies the asynchronous library-search job lifecycle from creation to result fetch.
 #[test]
 fn async_search_job_endpoints_work() {
     let url = start_server();

@@ -1,3 +1,5 @@
+//! Native CLI entrypoint for matcher search, network, metric, and database utilities.
+
 #[cfg(not(target_arch = "wasm32"))]
 use std::env;
 #[cfg(not(target_arch = "wasm32"))]
@@ -23,19 +25,32 @@ use spectral_matcher::{
     save_tsv_to_path, serve,
 };
 
+/// Batch config for one or more library-search jobs.
 #[cfg(not(target_arch = "wasm32"))]
 #[derive(Deserialize)]
 struct SearchBatchConfig {
+    /// Optional base directory used to derive per-job output paths from the job name.
+    #[serde(default)]
+    output_dir: Option<PathBuf>,
+    /// Search jobs executed from this batch file.
     jobs: Vec<SearchJobConfig>,
 }
 
+/// One CLI-configured library-search job.
 #[cfg(not(target_arch = "wasm32"))]
 #[derive(Deserialize)]
 struct SearchJobConfig {
+    /// Human-readable job name used in logs and, when `output_dir` is set, output paths.
     name: Option<String>,
+    /// Query MGF input path.
     query_mgf: PathBuf,
+    /// Library MGF input path.
     library_mgf: PathBuf,
+    /// Optional explicit JSON output path overriding derived batch output locations.
+    #[serde(default)]
     output_json: PathBuf,
+    /// Optional explicit TSV output path overriding derived batch output locations.
+    #[serde(default)]
     output_tsv: Option<PathBuf>,
     #[serde(default)]
     parse: ParseConfig,
@@ -46,6 +61,7 @@ struct SearchJobConfig {
     output: SearchOutputConfig,
 }
 
+/// Search-scoring configuration accepted from a CLI TOML file.
 #[cfg(not(target_arch = "wasm32"))]
 #[derive(Deserialize)]
 struct SearchConfig {
@@ -59,12 +75,14 @@ struct SearchConfig {
     top_n: usize,
 }
 
+/// Output-export options for a CLI search job.
 #[cfg(not(target_arch = "wasm32"))]
 #[derive(Deserialize, Default)]
 struct SearchOutputConfig {
     query_key: Option<SearchQueryKey>,
 }
 
+/// Taxonomy-reranking configuration accepted from a CLI TOML file.
 #[cfg(not(target_arch = "wasm32"))]
 #[derive(Deserialize)]
 struct SearchTaxonomyConfig {
@@ -72,24 +90,37 @@ struct SearchTaxonomyConfig {
     lotus_csv: PathBuf,
 }
 
+/// Batch config for one or more network-build jobs.
 #[cfg(not(target_arch = "wasm32"))]
 #[derive(Deserialize)]
 struct NetworkBatchConfig {
+    /// Optional base directory used to derive per-job output paths from the job name.
+    #[serde(default)]
+    output_dir: Option<PathBuf>,
+    /// Network jobs executed from this batch file.
     jobs: Vec<NetworkJobConfig>,
 }
 
+/// One CLI-configured network-build job.
 #[cfg(not(target_arch = "wasm32"))]
 #[derive(Deserialize)]
 struct NetworkJobConfig {
+    /// Human-readable job name used in logs and, when `output_dir` is set, output paths.
     name: Option<String>,
+    /// Input MGF used to construct the spectral network.
     input_mgf: PathBuf,
+    /// Optional explicit JSON output path overriding derived batch output locations.
+    #[serde(default)]
     output_json: PathBuf,
+    /// Optional explicit CSV directory overriding derived batch output locations.
+    #[serde(default)]
     output_csv_dir: Option<PathBuf>,
     #[serde(default)]
     parse: ParseConfig,
     build: NetworkBuildParams,
 }
 
+/// Mutable render state for the lightweight CLI progress display.
 #[cfg(not(target_arch = "wasm32"))]
 struct CliProgressState {
     last_stage: Option<JobProgressStage>,
@@ -99,6 +130,7 @@ struct CliProgressState {
     rendered: bool,
 }
 
+/// Terminal-oriented progress renderer used by `search` and `network` commands.
 #[cfg(not(target_arch = "wasm32"))]
 struct CliProgress {
     prefix: String,
@@ -106,8 +138,27 @@ struct CliProgress {
     state: Mutex<CliProgressState>,
 }
 
+/// Resolved output paths for a search job.
+#[cfg(not(target_arch = "wasm32"))]
+struct ResolvedSearchOutputs {
+    /// Final JSON artifact path.
+    json: PathBuf,
+    /// Optional TSV export path.
+    tsv: Option<PathBuf>,
+}
+
+/// Resolved output paths for a network job.
+#[cfg(not(target_arch = "wasm32"))]
+struct ResolvedNetworkOutputs {
+    /// Final JSON artifact path.
+    json: PathBuf,
+    /// Optional CSV companion directory.
+    csv_dir: Option<PathBuf>,
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 impl CliProgress {
+    /// Creates a progress renderer with a fixed prefix such as a job label.
     fn new(prefix: impl Into<String>) -> Self {
         Self {
             prefix: prefix.into(),
@@ -122,6 +173,7 @@ impl CliProgress {
         }
     }
 
+    /// Updates the progress display for the current stage.
     fn update(&self, stage: JobProgressStage, completed: u64, total: u64) {
         if !self.enabled {
             return;
@@ -165,6 +217,7 @@ impl CliProgress {
         state.rendered = true;
     }
 
+    /// Finalizes the display with a one-line summary.
     fn finish(&self, summary: &str) {
         if !self.enabled {
             return;
@@ -183,6 +236,7 @@ impl CliProgress {
     }
 }
 
+/// Renders a compact ASCII progress bar for CLI stage updates.
 #[cfg(not(target_arch = "wasm32"))]
 fn render_bar(percent: u64) -> String {
     let width = 24usize;
@@ -194,6 +248,7 @@ fn render_bar(percent: u64) -> String {
     )
 }
 
+/// Maps internal progress stages to user-facing CLI labels.
 #[cfg(not(target_arch = "wasm32"))]
 fn progress_stage_label(stage: JobProgressStage) -> &'static str {
     match stage {
@@ -209,6 +264,7 @@ fn progress_stage_label(stage: JobProgressStage) -> &'static str {
     }
 }
 
+/// CLI entrypoint for native and wasm builds.
 fn main() {
     #[cfg(not(target_arch = "wasm32"))]
     {
@@ -225,6 +281,7 @@ fn main() {
     }
 }
 
+/// Dispatches CLI subcommands.
 #[cfg(not(target_arch = "wasm32"))]
 fn run<I>(mut args: I) -> Result<(), String>
 where
@@ -259,6 +316,7 @@ where
     }
 }
 
+/// Dispatches `db` subcommands for listing and downloading curated spectral databases.
 #[cfg(not(target_arch = "wasm32"))]
 fn run_database_command<I>(mut args: I) -> Result<(), String>
 where
@@ -299,6 +357,7 @@ where
     }
 }
 
+/// Prints the curated spectral-database registry.
 #[cfg(not(target_arch = "wasm32"))]
 fn print_database_list() {
     println!("Available spectral databases:");
@@ -313,6 +372,7 @@ fn print_database_list() {
     }
 }
 
+/// Downloads one or more curated databases selected by id or by the special `all` token.
 #[cfg(not(target_arch = "wasm32"))]
 fn download_database_selection(selection: &str, output_dir: &Path) -> Result<(), String> {
     let databases = if selection.eq_ignore_ascii_case("all") {
@@ -357,6 +417,7 @@ fn download_database_selection(selection: &str, output_dir: &Path) -> Result<(),
     Ok(())
 }
 
+/// Creates a progress bar for a single database download.
 #[cfg(not(target_arch = "wasm32"))]
 fn build_download_progress_bar(name: &str) -> ProgressBar {
     let pb = ProgressBar::new_spinner();
@@ -371,6 +432,7 @@ fn build_download_progress_bar(name: &str) -> ProgressBar {
     pb
 }
 
+/// Spinner style used before a download has a known content length.
 #[cfg(not(target_arch = "wasm32"))]
 fn download_spinner_style() -> ProgressStyle {
     ProgressStyle::with_template("{spinner:.green} {msg}")
@@ -378,6 +440,7 @@ fn download_spinner_style() -> ProgressStyle {
         .tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏ ")
 }
 
+/// Full progress-bar style used when the remote server reports content length.
 #[cfg(not(target_arch = "wasm32"))]
 fn download_bar_style() -> ProgressStyle {
     ProgressStyle::with_template(
@@ -387,6 +450,7 @@ fn download_bar_style() -> ProgressStyle {
     .progress_chars("=> ")
 }
 
+/// Formats a byte count using human-readable binary units.
 #[cfg(not(target_arch = "wasm32"))]
 fn human_bytes(bytes: u64) -> String {
     const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
@@ -403,6 +467,7 @@ fn human_bytes(bytes: u64) -> String {
     }
 }
 
+/// Prints the currently supported similarity metrics and their descriptions.
 #[cfg(not(target_arch = "wasm32"))]
 fn print_metrics() {
     println!("Available similarity metrics:");
@@ -418,6 +483,7 @@ fn print_metrics() {
     println!("Use one of these values in `[jobs.search].metric` or `[jobs.build.compute].metric`.");
 }
 
+/// Parses the optional `--bind` argument for the HTTP server.
 #[cfg(not(target_arch = "wasm32"))]
 fn parse_bind_arg<I>(mut args: I) -> Result<String, String>
 where
@@ -438,6 +504,7 @@ where
     Ok(bind)
 }
 
+/// Parses the required `--config <path>` argument for config-driven commands.
 #[cfg(not(target_arch = "wasm32"))]
 fn parse_config_arg<I>(mut args: I) -> Result<String, String>
 where
@@ -458,6 +525,7 @@ where
     Ok(path)
 }
 
+/// Loads and runs every search job declared in a batch config file.
 #[cfg(not(target_arch = "wasm32"))]
 fn run_search_config(path: &Path) -> Result<(), String> {
     let raw = std::fs::read_to_string(path)
@@ -467,18 +535,21 @@ fn run_search_config(path: &Path) -> Result<(), String> {
     if config.jobs.is_empty() {
         return Err("config must contain at least one [[jobs]] entry".to_string());
     }
+    let output_dir = config.output_dir;
     for (idx, job) in config.jobs.into_iter().enumerate() {
         let label = job
             .name
             .clone()
             .unwrap_or_else(|| format!("job {}", idx + 1));
-        run_search_job(&label, job)?;
+        run_search_job(&label, output_dir.as_deref(), job)?;
     }
     Ok(())
 }
 
+/// Executes a single search job from a CLI config file.
 #[cfg(not(target_arch = "wasm32"))]
-fn run_search_job(label: &str, job: SearchJobConfig) -> Result<(), String> {
+fn run_search_job(label: &str, batch_output_dir: Option<&Path>, job: SearchJobConfig) -> Result<(), String> {
+    let outputs = resolve_search_outputs(batch_output_dir, label, &job)?;
     let request = SearchRequest {
         query_source_label: job.query_mgf.display().to_string(),
         query_mgf_text: None,
@@ -521,15 +592,16 @@ fn run_search_job(label: &str, job: SearchJobConfig) -> Result<(), String> {
     progress.finish("done");
     let json = serde_json::to_string_pretty(&artifact)
         .map_err(|err| format!("{label}: failed to serialize JSON output: {err}"))?;
-    save_json_to_path(&job.output_json, &json)
+    save_json_to_path(&outputs.json, &json)
         .map_err(|err| format!("{label}: failed to write JSON output: {err}"))?;
-    if let Some(path) = job.output_tsv {
+    if let Some(path) = outputs.tsv {
         save_tsv_to_path(&path, &artifact.tsv)
             .map_err(|err| format!("{label}: failed to write TSV output: {err}"))?;
     }
     Ok(())
 }
 
+/// Loads and runs every network job declared in a batch config file.
 #[cfg(not(target_arch = "wasm32"))]
 fn run_network_config(path: &Path) -> Result<(), String> {
     let raw = std::fs::read_to_string(path)
@@ -539,18 +611,25 @@ fn run_network_config(path: &Path) -> Result<(), String> {
     if config.jobs.is_empty() {
         return Err("config must contain at least one [[jobs]] entry".to_string());
     }
+    let output_dir = config.output_dir;
     for (idx, job) in config.jobs.into_iter().enumerate() {
         let label = job
             .name
             .clone()
             .unwrap_or_else(|| format!("job {}", idx + 1));
-        run_network_job(&label, job)?;
+        run_network_job(&label, output_dir.as_deref(), job)?;
     }
     Ok(())
 }
 
+/// Executes a single network-build job from a CLI config file.
 #[cfg(not(target_arch = "wasm32"))]
-fn run_network_job(label: &str, job: NetworkJobConfig) -> Result<(), String> {
+fn run_network_job(
+    label: &str,
+    batch_output_dir: Option<&Path>,
+    job: NetworkJobConfig,
+) -> Result<(), String> {
+    let outputs = resolve_network_outputs(batch_output_dir, label, &job)?;
     let request = spectral_matcher::NetworkRequest {
         source_label: job.input_mgf.display().to_string(),
         mgf_text: None,
@@ -571,14 +650,89 @@ fn run_network_job(label: &str, job: NetworkJobConfig) -> Result<(), String> {
     progress.finish("done");
     let json = serde_json::to_string_pretty(&artifact)
         .map_err(|err| format!("{label}: failed to serialize network JSON: {err}"))?;
-    save_json_to_path(&job.output_json, &json)
+    save_json_to_path(&outputs.json, &json)
         .map_err(|err| format!("{label}: failed to write network JSON: {err}"))?;
-    if let Some(dir) = job.output_csv_dir {
+    if let Some(dir) = outputs.csv_dir {
         save_network_csvs(&dir, &artifact)?;
     }
     Ok(())
 }
 
+/// Resolves effective JSON and TSV output paths for a search job.
+#[cfg(not(target_arch = "wasm32"))]
+fn resolve_search_outputs(
+    batch_output_dir: Option<&Path>,
+    label: &str,
+    job: &SearchJobConfig,
+) -> Result<ResolvedSearchOutputs, String> {
+    if !job.output_json.as_os_str().is_empty() {
+        return Ok(ResolvedSearchOutputs {
+            json: job.output_json.clone(),
+            tsv: job.output_tsv.clone(),
+        });
+    }
+    let Some(root) = batch_output_dir else {
+        return Err(format!(
+            "{label}: missing output path; set top-level `output_dir` or explicit `output_json`"
+        ));
+    };
+    let job_name = output_job_name(label, job.name.as_deref())?;
+    let job_dir = root.join(job_name);
+    Ok(ResolvedSearchOutputs {
+        json: job_dir.join("search.json"),
+        tsv: Some(job_dir.join("search.tsv")),
+    })
+}
+
+/// Resolves effective JSON and CSV output paths for a network job.
+#[cfg(not(target_arch = "wasm32"))]
+fn resolve_network_outputs(
+    batch_output_dir: Option<&Path>,
+    label: &str,
+    job: &NetworkJobConfig,
+) -> Result<ResolvedNetworkOutputs, String> {
+    if !job.output_json.as_os_str().is_empty() {
+        return Ok(ResolvedNetworkOutputs {
+            json: job.output_json.clone(),
+            csv_dir: job.output_csv_dir.clone(),
+        });
+    }
+    let Some(root) = batch_output_dir else {
+        return Err(format!(
+            "{label}: missing output path; set top-level `output_dir` or explicit `output_json`"
+        ));
+    };
+    let job_name = output_job_name(label, job.name.as_deref())?;
+    let job_dir = root.join(job_name);
+    Ok(ResolvedNetworkOutputs {
+        json: job_dir.join("network.json"),
+        csv_dir: Some(job_dir.join("csv")),
+    })
+}
+
+/// Validates the job name before it is used as a derived output directory name.
+#[cfg(not(target_arch = "wasm32"))]
+fn output_job_name<'a>(label: &str, name: Option<&'a str>) -> Result<&'a str, String> {
+    let Some(name) = name else {
+        return Err(format!(
+            "{label}: derived outputs require `name` when using top-level `output_dir`"
+        ));
+    };
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return Err(format!(
+            "{label}: derived outputs require a non-empty `name`"
+        ));
+    }
+    if trimmed == "." || trimmed == ".." || trimmed.contains('/') || trimmed.contains('\\') {
+        return Err(format!(
+            "{label}: job `name` cannot contain path separators or reserved path segments"
+        ));
+    }
+    Ok(trimmed)
+}
+
+/// Writes the network CSV companion files used by downstream visualization tools.
 #[cfg(not(target_arch = "wasm32"))]
 fn save_network_csvs(
     dir: &Path,
@@ -625,6 +779,7 @@ fn save_network_csvs(
     Ok(())
 }
 
+/// Returns the stable exported node id for CSV output.
 #[cfg(not(target_arch = "wasm32"))]
 fn exported_network_node_id(node: &spectral_matcher::NetworkNode) -> String {
     node.feature_id
@@ -634,6 +789,7 @@ fn exported_network_node_id(node: &spectral_matcher::NetworkNode) -> String {
         .unwrap_or_else(|| (node.id + 1).to_string())
 }
 
+/// Escapes a CSV cell using minimal quoting.
 #[cfg(not(target_arch = "wasm32"))]
 fn escape_csv(value: &str) -> String {
     if value.contains(',') || value.contains('"') || value.contains('\n') {

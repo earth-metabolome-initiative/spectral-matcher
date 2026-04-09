@@ -1,10 +1,12 @@
 #![cfg(not(target_arch = "wasm32"))]
+//! Integration tests for the command-line interface.
 
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+/// Creates a unique temporary directory for a test case.
 fn temp_dir(label: &str) -> PathBuf {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -15,14 +17,17 @@ fn temp_dir(label: &str) -> PathBuf {
     dir
 }
 
+/// Writes a UTF-8 text fixture to disk.
 fn write_file(path: &PathBuf, contents: &str) {
     fs::write(path, contents).expect("write file");
 }
 
+/// Produces a tiny one-spectrum MGF payload for CLI fixture generation.
 fn sample_mgf(name: &str) -> String {
     format!("BEGIN IONS\nNAME={name}\nPEPMASS=100.0\n10 100\n20 80\n30 50\nEND IONS\n")
 }
 
+/// Ensures the curated database registry is exposed through the CLI.
 #[test]
 fn db_list_cli_lists_seeded_databases() {
     let output = Command::new(env!("CARGO_BIN_EXE_spectral-matcher"))
@@ -38,6 +43,7 @@ fn db_list_cli_lists_seeded_databases() {
     assert!(stdout.contains("isdb_lotus_pos_energysum"));
 }
 
+/// Ensures the CLI advertises the supported spectral similarity metrics.
 #[test]
 fn metrics_cli_lists_available_metrics() {
     let output = Command::new(env!("CARGO_BIN_EXE_spectral-matcher"))
@@ -52,26 +58,28 @@ fn metrics_cli_lists_available_metrics() {
     assert!(stdout.contains("LinearEntropyWeighted"));
 }
 
+/// Verifies that the search command can write both JSON and TSV outputs.
 #[test]
 fn search_cli_writes_json_and_optional_tsv() {
     let dir = temp_dir("search_json_tsv");
     let query = dir.join("query.mgf");
     let library = dir.join("library.mgf");
     let config = dir.join("config.toml");
-    let output_json = dir.join("out/result.json");
-    let output_tsv = dir.join("out/result.tsv");
+    let output_root = dir.join("out");
+    let output_json = output_root.join("test/search.json");
+    let output_tsv = output_root.join("test/search.tsv");
     write_file(&query, &sample_mgf("query"));
     write_file(&library, &sample_mgf("library"));
     write_file(
         &config,
         &format!(
             r#"
+output_dir = "{}"
+
 [[jobs]]
 name = "test"
 query_mgf = "{}"
 library_mgf = "{}"
-output_json = "{}"
-output_tsv = "{}"
 
 [jobs.parse]
 min_peaks = 1
@@ -87,10 +95,9 @@ min_matched_peaks = 1
 min_similarity_threshold = 0.0
 top_n = 1
 "#,
+            output_root.display(),
             query.display(),
             library.display(),
-            output_json.display(),
-            output_tsv.display(),
         ),
     );
 
@@ -110,6 +117,7 @@ top_n = 1
     let _ = fs::remove_dir_all(dir);
 }
 
+/// Verifies that batch configs execute every declared search job.
 #[test]
 fn search_cli_runs_multiple_jobs() {
     let dir = temp_dir("search_batch");
@@ -192,8 +200,9 @@ fn search_cli_applies_taxonomic_reranking_when_taxonomy_config_is_present() {
     let library = dir.join("library.mgf");
     let lotus = dir.join("lotus.csv");
     let config = dir.join("config.toml");
-    let output_json = dir.join("out/result.json");
-    let output_tsv = dir.join("out/result.tsv");
+    let output_root = dir.join("out");
+    let output_json = output_root.join("taxonomy/search.json");
+    let output_tsv = output_root.join("taxonomy/search.tsv");
     write_file(
         &query,
         "BEGIN IONS\nNAME=q\nFEATURE_ID=1\nPEPMASS=100.0\n10 100\n20 80\n30 50\nEND IONS\n",
@@ -221,12 +230,12 @@ fn search_cli_applies_taxonomic_reranking_when_taxonomy_config_is_present() {
         &config,
         &format!(
             r#"
+output_dir = "{}"
+
 [[jobs]]
 name = "taxonomy"
 query_mgf = "{}"
 library_mgf = "{}"
-output_json = "{}"
-output_tsv = "{}"
 
 [jobs.parse]
 min_peaks = 1
@@ -246,10 +255,9 @@ top_n = 1
 query = "Withania somnifera"
 lotus_csv = "{}"
 "#,
+            output_root.display(),
             query.display(),
             library.display(),
-            output_json.display(),
-            output_tsv.display(),
             lotus.display(),
         ),
     );
@@ -280,8 +288,9 @@ fn network_cli_writes_network_json_and_csvs() {
     let dir = temp_dir("network");
     let input = dir.join("query.mgf");
     let config = dir.join("config.toml");
-    let output_json = dir.join("out/network.json");
-    let output_csv_dir = dir.join("out/csv");
+    let output_root = dir.join("out");
+    let output_json = output_root.join("network/network.json");
+    let output_csv_dir = output_root.join("network/csv");
     write_file(
         &input,
         concat!(
@@ -293,11 +302,11 @@ fn network_cli_writes_network_json_and_csvs() {
         &config,
         &format!(
             r#"
+output_dir = "{}"
+
 [[jobs]]
 name = "network"
 input_mgf = "{}"
-output_json = "{}"
-output_csv_dir = "{}"
 
 [jobs.parse]
 min_peaks = 1
@@ -313,9 +322,8 @@ intensity_power = 1.0
 threshold = 0.0
 top_k = 5
 "#,
+            output_root.display(),
             input.display(),
-            output_json.display(),
-            output_csv_dir.display(),
         ),
     );
 

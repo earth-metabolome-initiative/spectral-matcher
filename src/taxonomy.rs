@@ -1,3 +1,5 @@
+//! LOTUS taxonomy loading and lineage-matching helpers used for search reranking.
+
 use std::collections::HashMap;
 use std::io::Read;
 
@@ -16,6 +18,7 @@ const TAXONOMY_COLUMN_NAMES: [&str; 10] = [
     "organism_taxonomy_10varietas",
 ];
 
+/// Ordered taxonomy ranks supported by the reranking workflow.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum TaxonomicRank {
     Domain,
@@ -31,6 +34,7 @@ pub enum TaxonomicRank {
 }
 
 impl TaxonomicRank {
+    /// All supported taxonomy ranks from broadest to most specific.
     pub const ALL: [Self; 10] = [
         Self::Domain,
         Self::Kingdom,
@@ -44,6 +48,7 @@ impl TaxonomicRank {
         Self::Varietas,
     ];
 
+    /// Human-readable lowercase label for the rank.
     pub fn label(self) -> &'static str {
         match self {
             Self::Domain => "domain",
@@ -59,6 +64,7 @@ impl TaxonomicRank {
         }
     }
 
+    /// Integer score used when turning a deepest shared rank into a taxonomic bonus.
     pub fn score(self) -> u8 {
         match self {
             Self::Domain => 1,
@@ -90,20 +96,24 @@ impl TaxonomicRank {
     }
 }
 
+/// Taxonomic lineage with one optional value per supported rank.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct TaxonomyLineage {
     ranks: [Option<String>; 10],
 }
 
 impl TaxonomyLineage {
+    /// Creates a lineage directly from rank-ordered optional values.
     pub fn from_rank_values(values: [Option<String>; 10]) -> Self {
         Self { ranks: values }
     }
 
+    /// Returns the value stored for a given rank, if present.
     pub fn value_for(&self, rank: TaxonomicRank) -> Option<&str> {
         self.ranks[rank.index()].as_deref()
     }
 
+    /// Returns the specificity score of the deepest populated rank.
     pub fn specificity_score(&self) -> usize {
         TaxonomicRank::ALL
             .iter()
@@ -112,6 +122,7 @@ impl TaxonomyLineage {
             .unwrap_or(0)
     }
 
+    /// Returns the deepest rank shared by both lineages, if any.
     pub fn deepest_shared_rank(&self, other: &Self) -> Option<TaxonomicRank> {
         TaxonomicRank::ALL.iter().rev().copied().find(|rank| {
             match (self.value_for(*rank), other.value_for(*rank)) {
@@ -121,6 +132,7 @@ impl TaxonomyLineage {
         })
     }
 
+    /// Returns a copy of the lineage truncated at the requested rank.
     pub fn truncated_to(&self, rank: TaxonomicRank) -> Self {
         let mut ranks: [Option<String>; 10] = Default::default();
         for candidate in TaxonomicRank::ALL {
@@ -139,6 +151,7 @@ impl TaxonomyLineage {
     }
 }
 
+/// Organism metadata attached to a short InChIKey entry in LOTUS.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LotusBiosource {
     pub organism_name: String,
@@ -146,12 +159,14 @@ pub struct LotusBiosource {
     pub lineage: TaxonomyLineage,
 }
 
+/// Query lineage resolved from a user-supplied organism or taxon name.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ResolvedLotusQuery {
     pub query_label: String,
     pub lineage: TaxonomyLineage,
 }
 
+/// Best taxonomic match found for a library candidate.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TaxonomicMatch {
     pub score: u8,
@@ -161,6 +176,7 @@ pub struct TaxonomicMatch {
     pub matched_short_inchikey: Option<String>,
 }
 
+/// Index built from LOTUS metadata for resolving query taxa and matching candidates.
 #[derive(Clone, Debug, Default)]
 pub struct LotusMetadataIndex {
     by_short_inchikey: HashMap<String, Vec<LotusBiosource>>,
@@ -170,6 +186,7 @@ pub struct LotusMetadataIndex {
 }
 
 impl LotusMetadataIndex {
+    /// Resolves a user-provided query string into a lineage using LOTUS metadata.
     pub fn resolve_query_lineage(&self, input: &str) -> Option<ResolvedLotusQuery> {
         let trimmed = input.trim();
         if trimmed.is_empty() {
@@ -198,6 +215,7 @@ impl LotusMetadataIndex {
         })
     }
 
+    /// Returns the best lineage match for a short InChIKey against the query lineage.
     pub fn match_candidate(
         &self,
         short_inchikey: &str,
@@ -241,10 +259,12 @@ impl LotusMetadataIndex {
     }
 }
 
+/// Parses LOTUS metadata from in-memory CSV bytes.
 pub fn load_lotus_bytes(bytes: &[u8]) -> Result<LotusMetadataIndex, String> {
     parse_lotus_reader(bytes)
 }
 
+/// Loads LOTUS metadata from a CSV file on disk.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn load_lotus_path(path: &std::path::Path) -> Result<LotusMetadataIndex, String> {
     let bytes =
@@ -252,6 +272,7 @@ pub fn load_lotus_path(path: &std::path::Path) -> Result<LotusMetadataIndex, Str
     load_lotus_bytes(&bytes)
 }
 
+/// Extracts a short InChIKey candidate from a spectrum record's headers.
 pub fn short_inchikey_from_record<T>(record: &SpectrumRecord<T>) -> Option<String> {
     let mut best: Option<(usize, String)> = None;
     for (key, value) in &record.meta.headers {

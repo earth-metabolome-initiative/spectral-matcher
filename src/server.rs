@@ -1,4 +1,9 @@
 #![cfg(not(target_arch = "wasm32"))]
+//! Minimal HTTP server exposing synchronous and asynchronous matcher endpoints.
+//!
+//! The server intentionally keeps the transport layer small and dependency-light.
+//! It accepts JSON requests over plain HTTP, dispatches them to the search and
+//! networking pipelines, and stores asynchronous job state in memory.
 
 use std::collections::HashMap;
 use std::io::{Read, Write};
@@ -15,27 +20,40 @@ use crate::search::{
     run_search_request_with_progress,
 };
 
+/// In-memory state shared across HTTP connections.
 #[derive(Default)]
 struct ServerState {
+    /// Monotonic counter used to allocate new job identifiers.
     next_job_id: AtomicU64,
+    /// Active and completed jobs keyed by server-assigned identifier.
     jobs: Mutex<HashMap<u64, StoredJob>>,
 }
 
+/// Current lifecycle state for an asynchronous job.
 #[derive(Clone)]
 enum StoredJob {
+    /// Job has been accepted but worker execution has not started yet.
     Queued(Arc<JobProgressTracker>),
+    /// Job is actively computing and reporting progress updates.
     Running(Arc<JobProgressTracker>),
+    /// Job completed successfully and the result payload is available.
     Finished(MatcherJobResult),
+    /// Job terminated with an error, optionally preserving the last progress snapshot.
     Failed {
         error: String,
         progress: Option<JobProgress>,
     },
 }
 
+/// Thread-safe progress tracker shared between the worker and polling endpoints.
 struct JobProgressTracker {
+    /// Current coarse-grained stage in the pipeline.
     stage: Mutex<JobProgressStage>,
+    /// Completed work units for the active stage.
     completed: AtomicU64,
+    /// Total work units expected for the active stage.
     total: AtomicU64,
+    /// Cooperative cancellation flag set by the cancel endpoint.
     cancelled: AtomicBool,
 }
 
@@ -51,6 +69,7 @@ impl Default for JobProgressTracker {
 }
 
 impl JobProgressTracker {
+    /// Replaces the current progress snapshot with a new stage and counters.
     fn set(&self, stage: JobProgressStage, completed: u64, total: u64) {
         if let Ok(mut slot) = self.stage.lock() {
             *slot = stage;
@@ -59,6 +78,7 @@ impl JobProgressTracker {
         self.total.store(total.max(1), Ordering::Relaxed);
     }
 
+    /// Captures the latest externally visible progress state.
     fn snapshot(&self) -> JobProgress {
         let stage = self
             .stage
@@ -72,15 +92,18 @@ impl JobProgressTracker {
         }
     }
 
+    /// Requests cooperative cancellation for the associated worker.
     fn cancel(&self) {
         self.cancelled.store(true, Ordering::Relaxed);
     }
 
+    /// Returns whether cancellation has been requested.
     fn is_cancelled(&self) -> bool {
         self.cancelled.load(Ordering::Relaxed)
     }
 }
 
+/// Starts the HTTP server on the provided `host:port` binding.
 pub fn serve(bind: &str) -> Result<(), String> {
     let listener =
         TcpListener::bind(bind).map_err(|err| format!("failed to bind {bind}: {err}"))?;
@@ -105,6 +128,7 @@ pub fn serve(bind: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Handles a single HTTP connection from request parsing through response writeback.
 fn handle_connection(mut stream: TcpStream, state: &Arc<ServerState>) -> Result<(), String> {
     let request = read_request(&mut stream)?;
     let response = handle_request(request, state);
@@ -116,12 +140,17 @@ fn handle_connection(mut stream: TcpStream, state: &Arc<ServerState>) -> Result<
         .map_err(|err| format!("failed to flush response: {err}"))
 }
 
+/// Minimal request representation used by the server router.
 struct HttpRequest {
+    /// Uppercase HTTP method such as `GET` or `POST`.
     method: String,
+    /// Request target path without scheme or authority.
     path: String,
+    /// Raw request body bytes.
     body: Vec<u8>,
 }
 
+/// Reads an HTTP/1.1 request from a TCP stream into an [`HttpRequest`].
 fn read_request(stream: &mut TcpStream) -> Result<HttpRequest, String> {
     let mut buffer = Vec::new();
     let mut header_end = None;
@@ -171,10 +200,12 @@ fn read_request(stream: &mut TcpStream) -> Result<HttpRequest, String> {
     Ok(HttpRequest { method, path, body })
 }
 
+/// Finds the byte offset where the HTTP headers end.
 fn find_header_end(buffer: &[u8]) -> Option<usize> {
     buffer.windows(4).position(|window| window == b"\r\n\r\n")
 }
 
+/// Routes an HTTP request to the matching endpoint handler.
 fn handle_request(request: HttpRequest, state: &Arc<ServerState>) -> Vec<u8> {
     match (request.method.as_str(), request.path.as_str()) {
         ("GET", "/v1/health") => json_response(200, &HealthResponse { status: "ok" }),
@@ -241,6 +272,7 @@ fn handle_request(request: HttpRequest, state: &Arc<ServerState>) -> Vec<u8> {
     }
 }
 
+/// Creates an asynchronous job entry and starts worker execution in a background thread.
 fn start_job<F>(state: &Arc<ServerState>, job_fn: F) -> Vec<u8>
 where
     F: FnOnce(Arc<JobProgressTracker>) -> Result<MatcherJobResult, String> + Send + 'static,
@@ -287,12 +319,14 @@ where
     )
 }
 
+/// Replaces the stored state for a given job identifier.
 fn update_job(state: &Arc<ServerState>, job_id: u64, job: StoredJob) {
     if let Ok(mut jobs) = state.jobs.lock() {
         jobs.insert(job_id, job);
     }
 }
 
+/// Returns the current status payload for an asynchronous job.
 fn get_job_status_response(state: &Arc<ServerState>, raw_job_id: &str) -> Vec<u8> {
     let job_id = match raw_job_id.parse::<u64>() {
         Ok(job_id) => job_id,
@@ -335,6 +369,7 @@ fn get_job_status_response(state: &Arc<ServerState>, raw_job_id: &str) -> Vec<u8
     json_response(200, &response)
 }
 
+/// Marks a queued or running job as cancelled.
 fn cancel_job_response(state: &Arc<ServerState>, raw_job_id: &str) -> Vec<u8> {
     let job_id = match raw_job_id.parse::<u64>() {
         Ok(job_id) => job_id,
@@ -363,6 +398,7 @@ fn cancel_job_response(state: &Arc<ServerState>, raw_job_id: &str) -> Vec<u8> {
     }
 }
 
+/// Returns the final result payload for a completed asynchronous job.
 fn get_job_result_response(state: &Arc<ServerState>, raw_job_id: &str) -> Vec<u8> {
     let job_id = match raw_job_id.parse::<u64>() {
         Ok(job_id) => job_id,
@@ -381,10 +417,12 @@ fn get_job_result_response(state: &Arc<ServerState>, raw_job_id: &str) -> Vec<u8
     }
 }
 
+/// Deserializes a JSON request body into the target type.
 fn decode_json<T: serde::de::DeserializeOwned>(body: &[u8]) -> Result<T, String> {
     serde_json::from_slice(body).map_err(|err| format!("invalid JSON request: {err}"))
 }
 
+/// Serializes a value into a JSON HTTP response.
 fn json_response<T: serde::Serialize>(status: u16, value: &T) -> Vec<u8> {
     match serde_json::to_vec(value) {
         Ok(body) => raw_response(status, "application/json", &body),
@@ -392,11 +430,13 @@ fn json_response<T: serde::Serialize>(status: u16, value: &T) -> Vec<u8> {
     }
 }
 
+/// Builds a JSON error response containing a single `error` message field.
 fn error_response(status: u16, message: &str) -> Vec<u8> {
     let body = format!(r#"{{"error":"{}"}}"#, escape_json_string(message));
     raw_response(status, "application/json", body.as_bytes())
 }
 
+/// Builds a complete HTTP/1.1 response with standard headers.
 fn raw_response(status: u16, content_type: &str, body: &[u8]) -> Vec<u8> {
     let status_text = match status {
         200 => "OK",
@@ -416,6 +456,7 @@ fn raw_response(status: u16, content_type: &str, body: &[u8]) -> Vec<u8> {
     response
 }
 
+/// Escapes a plain string for safe inclusion in a minimal JSON string literal.
 fn escape_json_string(value: &str) -> String {
     value
         .replace('\\', "\\\\")
@@ -428,6 +469,7 @@ fn escape_json_string(value: &str) -> String {
 mod tests {
     use super::raw_response;
 
+    /// Ensures raw responses advertise the actual payload size.
     #[test]
     fn raw_response_contains_content_length() {
         let response =
