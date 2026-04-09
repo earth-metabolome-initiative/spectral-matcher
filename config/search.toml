@@ -1,9 +1,9 @@
 output_dir = "/Users/pma/git_repos/EMI/spectral-matcher/out"
 
 [[jobs]]
-name = "mapp_vs_gnps_lotus"
+name = "mapp_vs_isdb_lotus"
 query_mgf = "/Users/pma/git_repos/EMI/spectral-matcher/fixtures/mapp_batch_00231.mgf"
-library_mgf = "/Users/pma/01_large_files/mgf/matchms.mgf"
+library_mgf = "/Users/pma/01_large_files/mgf/isdb_lotus_pos_energySum.mgf"
 
 [jobs.parse]
 min_peaks = 5

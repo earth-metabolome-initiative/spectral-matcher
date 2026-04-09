@@ -1,10 +1,16 @@
 #![cfg(not(target_arch = "wasm32"))]
 //! Integration tests for the command-line interface.
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
+
+use spectral_matcher::{
+    ComputeParams, ConsensusArtifact, LibrarySearchParams, ParseStats, SearchArtifact,
+    SearchArtifactHit, SearchArtifactResult, SearchQueryKey, SimilarityMetric, SpectrumMetadata,
+};
 
 /// Creates a unique temporary directory for a test case.
 fn temp_dir(label: &str) -> PathBuf {
@@ -25,6 +31,83 @@ fn write_file(path: &PathBuf, contents: &str) {
 /// Produces a tiny one-spectrum MGF payload for CLI fixture generation.
 fn sample_mgf(name: &str) -> String {
     format!("BEGIN IONS\nNAME={name}\nPEPMASS=100.0\n10 100\n20 80\n30 50\nEND IONS\n")
+}
+
+/// Writes a minimal search artifact fixture for consensus CLI tests.
+fn write_search_artifact(
+    path: &PathBuf,
+    library_source_label: &str,
+    library_spectra: Vec<SpectrumMetadata>,
+    hits: Vec<SearchArtifactHit>,
+) {
+    let queries = vec![SpectrumMetadata {
+        id: 0,
+        label: "query_0".to_string(),
+        raw_name: "query_0".to_string(),
+        feature_id: Some("feature_0".to_string()),
+        scans: Some("scan_0".to_string()),
+        filename: None,
+        source_scan_usi: None,
+        featurelist_feature_id: None,
+        headers: BTreeMap::new(),
+        precursor_mz: 100.0,
+        num_peaks: 3,
+    }];
+    let artifact = SearchArtifact {
+        query_source_label: "query.mgf".to_string(),
+        library_source_label: library_source_label.to_string(),
+        query_stats: ParseStats::default(),
+        library_stats: ParseStats::default(),
+        search: LibrarySearchParams {
+            compute: ComputeParams {
+                metric: SimilarityMetric::CosineGreedy,
+                fragment_mz_tolerance: 0.2,
+                mz_power: 0.0,
+                intensity_power: 1.0,
+                top_n_peaks: None,
+            },
+            precursor_mz_tolerance: 0.01,
+            min_matched_peaks: 3,
+            min_similarity_threshold: 0.7,
+            top_n: 20,
+        },
+        taxonomy: None,
+        query_key: SearchQueryKey::FeatureId,
+        query_spectra: queries,
+        library_spectra,
+        result: SearchArtifactResult {
+            hits,
+            query_count: 1,
+            library_count: 2,
+            metric: SimilarityMetric::CosineGreedy,
+            taxonomic_reranking_applied: true,
+            taxonomic_query: Some("Withania somnifera".to_string()),
+        },
+        tsv: String::new(),
+    };
+    write_file(
+        path,
+        &serde_json::to_string_pretty(&artifact).expect("serialize search artifact"),
+    );
+}
+
+/// Builds minimal library metadata used in search-artifact fixtures.
+fn library_meta(id: usize, raw_name: &str, inchikey: &str) -> SpectrumMetadata {
+    let mut headers = BTreeMap::new();
+    headers.insert("INCHIKEY".to_string(), inchikey.to_string());
+    SpectrumMetadata {
+        id,
+        label: raw_name.to_string(),
+        raw_name: raw_name.to_string(),
+        feature_id: None,
+        scans: None,
+        filename: None,
+        source_scan_usi: None,
+        featurelist_feature_id: None,
+        headers,
+        precursor_mz: 200.0 + id as f64,
+        num_peaks: 5,
+    }
 }
 
 /// Ensures the curated database registry is exposed through the CLI.
@@ -280,6 +363,140 @@ lotus_csv = "{}"
     let tsv = fs::read_to_string(output_tsv).expect("tsv output");
     let header = tsv.lines().next().expect("tsv header");
     assert!(header.contains("hit_taxonomic_score"));
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
+fn consensus_cli_merges_two_search_artifacts_into_one_annotation_per_query() {
+    let dir = temp_dir("consensus");
+    let left = dir.join("gnps.json");
+    let right = dir.join("isdb.json");
+    let config = dir.join("config.toml");
+    let output_root = dir.join("out");
+    let output_json = output_root.join("merged/consensus.json");
+    let output_tsv = output_root.join("merged/consensus.tsv");
+    write_search_artifact(
+        &left,
+        "gnps.mgf",
+        vec![
+            library_meta(0, "singleton", "BBBBBBBBBBBBBB-AAAA"),
+            library_meta(1, "consensus_gnps", "AAAAAAAAAAAAAA-BBBB"),
+        ],
+        vec![
+            SearchArtifactHit {
+                query_index: 0,
+                library_index: 0,
+                rank: 1,
+                rank_before_taxonomy: Some(2),
+                spectral_score: 0.9,
+                ms1_deviation_ppm: 1.0,
+                taxonomic_score: 1.0,
+                combined_score: 1.9,
+                matches: 6,
+                matched_organism_name: Some("Withania somnifera".to_string()),
+                matched_organism_wikidata: Some("Q1".to_string()),
+                matched_shared_rank: Some("species".to_string()),
+                matched_short_inchikey: Some("BBBBBBBBBBBBBB".to_string()),
+            },
+            SearchArtifactHit {
+                query_index: 0,
+                library_index: 1,
+                rank: 3,
+                rank_before_taxonomy: Some(4),
+                spectral_score: 0.7,
+                ms1_deviation_ppm: 2.0,
+                taxonomic_score: 1.0,
+                combined_score: 1.7,
+                matches: 6,
+                matched_organism_name: Some("Withania somnifera".to_string()),
+                matched_organism_wikidata: Some("Q1".to_string()),
+                matched_shared_rank: Some("species".to_string()),
+                matched_short_inchikey: Some("AAAAAAAAAAAAAA".to_string()),
+            },
+        ],
+    );
+    write_search_artifact(
+        &right,
+        "isdb.mgf",
+        vec![
+            library_meta(0, "other_singleton", "CCCCCCCCCCCCCC-DDDD"),
+            library_meta(1, "consensus_isdb", "AAAAAAAAAAAAAA-CCCC"),
+        ],
+        vec![
+            SearchArtifactHit {
+                query_index: 0,
+                library_index: 0,
+                rank: 1,
+                rank_before_taxonomy: Some(2),
+                spectral_score: 0.85,
+                ms1_deviation_ppm: 1.0,
+                taxonomic_score: 1.0,
+                combined_score: 1.85,
+                matches: 6,
+                matched_organism_name: Some("Withania somnifera".to_string()),
+                matched_organism_wikidata: Some("Q1".to_string()),
+                matched_shared_rank: Some("species".to_string()),
+                matched_short_inchikey: Some("CCCCCCCCCCCCCC".to_string()),
+            },
+            SearchArtifactHit {
+                query_index: 0,
+                library_index: 1,
+                rank: 2,
+                rank_before_taxonomy: Some(3),
+                spectral_score: 0.75,
+                ms1_deviation_ppm: 2.0,
+                taxonomic_score: 1.0,
+                combined_score: 1.75,
+                matches: 6,
+                matched_organism_name: Some("Withania somnifera".to_string()),
+                matched_organism_wikidata: Some("Q1".to_string()),
+                matched_shared_rank: Some("species".to_string()),
+                matched_short_inchikey: Some("AAAAAAAAAAAAAA".to_string()),
+            },
+        ],
+    );
+    write_file(
+        &config,
+        &format!(
+            r#"
+output_dir = "{}"
+
+[[jobs]]
+name = "merged"
+left_search_json = "{}"
+right_search_json = "{}"
+left_name = "gnps"
+right_name = "isdb"
+"#,
+            output_root.display(),
+            left.display(),
+            right.display(),
+        ),
+    );
+
+    let output = Command::new(env!("CARGO_BIN_EXE_spectral-matcher"))
+        .arg("consensus")
+        .arg("--config")
+        .arg(&config)
+        .output()
+        .expect("run consensus cli");
+    assert!(output.status.success(), "{output:?}");
+
+    let json = fs::read_to_string(output_json).expect("json output");
+    let parsed: ConsensusArtifact = serde_json::from_str(&json).expect("valid consensus json");
+    let annotation = parsed.result.queries[0]
+        .annotation
+        .as_ref()
+        .expect("annotation");
+    assert_eq!(annotation.consensus_key.as_deref(), Some("AAAAAAAAAAAAAA"));
+    assert_eq!(annotation.support_count, 2);
+    assert_eq!(annotation.best_rank_by_input["gnps"], 3);
+    assert_eq!(annotation.best_rank_by_input["isdb"], 2);
+
+    let tsv = fs::read_to_string(output_tsv).expect("tsv output");
+    let header = tsv.lines().next().expect("tsv header");
+    assert!(header.contains("best_rank_gnps"));
+    assert!(header.contains("best_rank_isdb"));
     let _ = fs::remove_dir_all(dir);
 }
 

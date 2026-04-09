@@ -1,11 +1,11 @@
-//! TSV and JSON export helpers for search results and browser downloads.
+//! TSV and JSON export helpers for search and consensus results and browser downloads.
 
 use std::collections::BTreeSet;
 
 use serde::Serialize;
 
-use crate::api::SearchArtifactResult;
-use crate::model::SpectrumRecord;
+use crate::api::{ConsensusArtifactResult, ConsensusClass, SearchArtifactResult};
+use crate::model::{SpectrumMetadata, SpectrumRecord};
 
 /// Query identifier column used in TSV/JSON exports.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, serde::Deserialize)]
@@ -54,6 +54,18 @@ impl SearchQueryKey {
             Self::RawName => record.meta.raw_name.clone(),
             Self::Label => record.meta.label.clone(),
             Self::NodeId => record.meta.id.to_string(),
+        }
+    }
+
+    /// Returns the identifier value for the selected query-key mode using exported metadata.
+    pub fn value_for_meta(self, meta: &SpectrumMetadata) -> String {
+        match self {
+            Self::FeatureId => meta.feature_id.clone().unwrap_or_default(),
+            Self::FeaturelistFeatureId => meta.featurelist_feature_id.clone().unwrap_or_default(),
+            Self::Scans => meta.scans.clone().unwrap_or_default(),
+            Self::RawName => meta.raw_name.clone(),
+            Self::Label => meta.label.clone(),
+            Self::NodeId => meta.id.to_string(),
         }
     }
 }
@@ -159,6 +171,198 @@ pub fn export_search_tsv<TQ, TL>(
                 .unwrap_or_default()
         }));
         push_tsv_row(&mut out, &row);
+    }
+
+    out
+}
+
+/// Renders a consensus artifact as a TSV table with one row per query spectrum.
+pub fn export_consensus_tsv(
+    result: &ConsensusArtifactResult,
+    queries: &[SpectrumMetadata],
+    query_key: SearchQueryKey,
+    input_names: &[&str],
+) -> String {
+    let dynamic_headers: BTreeSet<String> = result
+        .queries
+        .iter()
+        .filter_map(|row| row.annotation.as_ref())
+        .flat_map(|annotation| annotation.representative_attributes.keys().cloned())
+        .collect();
+    let input_columns = input_names
+        .iter()
+        .map(|name| ((*name).to_string(), sanitize_column_name(name)))
+        .collect::<Vec<_>>();
+
+    let mut header = vec![
+        "query_export_key".to_string(),
+        "query_key_mode".to_string(),
+        "annotation_present".to_string(),
+        "consensus_key".to_string(),
+        "consensus_score".to_string(),
+        "consensus_class".to_string(),
+        "support_count".to_string(),
+        "support_hit_count".to_string(),
+        "support_libraries".to_string(),
+        "representative_input_name".to_string(),
+        "representative_library_source_label".to_string(),
+        "representative_rank".to_string(),
+        "representative_rank_before_taxonomy".to_string(),
+        "representative_spectral_score".to_string(),
+        "representative_taxonomic_score".to_string(),
+        "representative_combined_score".to_string(),
+        "representative_matches".to_string(),
+        "representative_precursor_mz".to_string(),
+        "representative_ms1_deviation_ppm".to_string(),
+        "representative_raw_name".to_string(),
+        "representative_taxonomic_shared_rank".to_string(),
+        "representative_taxonomic_organism_name".to_string(),
+        "representative_taxonomic_organism_wikidata".to_string(),
+        "representative_taxonomic_short_inchikey".to_string(),
+        "representative_full_inchikey".to_string(),
+        "exact_structure_consensus".to_string(),
+    ];
+    for (_, column) in &input_columns {
+        header.extend([
+            format!("best_rank_{column}"),
+            format!("best_spectral_score_{column}"),
+            format!("best_taxonomic_score_{column}"),
+            format!("best_combined_score_{column}"),
+            format!("best_matches_{column}"),
+        ]);
+    }
+    header.extend(
+        dynamic_headers
+            .iter()
+            .map(|key| format!("representative_{key}")),
+    );
+
+    let mut out = String::new();
+    push_tsv_row(&mut out, &header);
+
+    for row in &result.queries {
+        let Some(query) = queries.get(row.query_index) else {
+            continue;
+        };
+        let mut values = vec![
+            query_key.value_for_meta(query),
+            query_key.label().to_string(),
+            row.annotation.is_some().to_string(),
+            String::new(),
+            String::new(),
+            String::new(),
+            String::new(),
+            String::new(),
+            String::new(),
+            String::new(),
+            String::new(),
+            String::new(),
+            String::new(),
+            String::new(),
+            String::new(),
+            String::new(),
+            String::new(),
+            String::new(),
+            String::new(),
+            String::new(),
+            String::new(),
+            String::new(),
+            String::new(),
+            String::new(),
+            String::new(),
+            String::new(),
+        ];
+        if let Some(annotation) = row.annotation.as_ref() {
+            values[3] = annotation.consensus_key.clone().unwrap_or_default();
+            values[4] = format!("{:.8}", annotation.consensus_score);
+            values[5] = consensus_class_label(annotation.consensus_class).to_string();
+            values[6] = annotation.support_count.to_string();
+            values[7] = annotation.support_hit_count.to_string();
+            values[8] = annotation.support_libraries.join(";");
+            values[9] = annotation.representative_input_name.clone();
+            values[10] = annotation.representative_library_source_label.clone();
+            values[11] = annotation.representative_rank.to_string();
+            values[12] = annotation
+                .representative_rank_before_taxonomy
+                .map(|value| value.to_string())
+                .unwrap_or_default();
+            values[13] = format!("{:.8}", annotation.representative_spectral_score);
+            values[14] = format!("{:.8}", annotation.representative_taxonomic_score);
+            values[15] = format!("{:.8}", annotation.representative_combined_score);
+            values[16] = annotation.representative_matches.to_string();
+            values[17] = format!("{:.6}", annotation.representative_precursor_mz);
+            values[18] = format!("{:.4}", annotation.representative_ms1_deviation_ppm);
+            values[19] = annotation.representative_raw_name.clone();
+            values[20] = annotation.representative_shared_rank.clone().unwrap_or_default();
+            values[21] = annotation
+                .representative_organism_name
+                .clone()
+                .unwrap_or_default();
+            values[22] = annotation
+                .representative_organism_wikidata
+                .clone()
+                .unwrap_or_default();
+            values[23] = annotation
+                .representative_short_inchikey
+                .clone()
+                .unwrap_or_default();
+            values[24] = annotation
+                .representative_full_inchikey
+                .clone()
+                .unwrap_or_default();
+            values[25] = annotation.exact_structure_consensus.to_string();
+        }
+
+        for (input_name, _) in &input_columns {
+            if let Some(annotation) = row.annotation.as_ref() {
+                values.extend([
+                    annotation
+                        .best_rank_by_input
+                        .get(input_name)
+                        .map(|value| value.to_string())
+                        .unwrap_or_default(),
+                    annotation
+                        .best_spectral_score_by_input
+                        .get(input_name)
+                        .map(|value| format!("{value:.8}"))
+                        .unwrap_or_default(),
+                    annotation
+                        .best_taxonomic_score_by_input
+                        .get(input_name)
+                        .map(|value| format!("{value:.8}"))
+                        .unwrap_or_default(),
+                    annotation
+                        .best_combined_score_by_input
+                        .get(input_name)
+                        .map(|value| format!("{value:.8}"))
+                        .unwrap_or_default(),
+                    annotation
+                        .best_matches_by_input
+                        .get(input_name)
+                        .map(|value| value.to_string())
+                        .unwrap_or_default(),
+                ]);
+            } else {
+                values.extend([
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                ]);
+            }
+        }
+
+        for key in &dynamic_headers {
+            values.push(
+                row.annotation
+                    .as_ref()
+                    .and_then(|annotation| annotation.representative_attributes.get(key))
+                    .cloned()
+                    .unwrap_or_default(),
+            );
+        }
+        push_tsv_row(&mut out, &values);
     }
 
     out
@@ -337,6 +541,31 @@ fn push_tsv_row(out: &mut String, values: &[String]) {
         out.push_str(&escape_tsv(value));
     }
     out.push('\n');
+}
+
+fn sanitize_column_name(value: &str) -> String {
+    let mut out = String::new();
+    for ch in value.chars() {
+        if ch.is_ascii_alphanumeric() {
+            out.push(ch.to_ascii_lowercase());
+        } else if !out.ends_with('_') {
+            out.push('_');
+        }
+    }
+    let trimmed = out.trim_matches('_');
+    if trimmed.is_empty() {
+        "input".to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+fn consensus_class_label(value: ConsensusClass) -> &'static str {
+    match value {
+        ConsensusClass::Singleton => "singleton",
+        ConsensusClass::CrossLibraryExact => "cross_library_exact",
+        ConsensusClass::CrossLibraryShortInchikey => "cross_library_short_inchikey",
+    }
 }
 
 #[cfg(test)]

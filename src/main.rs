@@ -19,10 +19,11 @@ use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
 
 #[cfg(not(target_arch = "wasm32"))]
 use spectral_matcher::{
-    JobProgressStage, NetworkBuildParams, ParseConfig, SearchQueryKey, SearchRequest,
-    SimilarityMetric, download_spectral_database, resolve_spectral_database, spectral_databases,
-    build_network_artifact_with_progress, run_search_request_with_progress, save_json_to_path,
-    save_tsv_to_path, serve,
+    ConsensusMergeParams, JobProgressStage, NetworkBuildParams, ParseConfig, SearchArtifact,
+    SearchQueryKey, SearchRequest, SimilarityMetric, build_network_artifact_with_progress,
+    download_spectral_database, merge_search_artifacts, resolve_spectral_database,
+    run_search_request_with_progress, save_json_to_path, save_tsv_to_path, serve,
+    spectral_databases,
 };
 
 /// Batch config for one or more library-search jobs.
@@ -120,6 +121,55 @@ struct NetworkJobConfig {
     build: NetworkBuildParams,
 }
 
+/// Batch config for one or more cross-library consensus jobs.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Deserialize)]
+struct ConsensusBatchConfig {
+    /// Optional base directory used to derive per-job output paths from the job name.
+    #[serde(default)]
+    output_dir: Option<PathBuf>,
+    /// Consensus jobs executed from this batch file.
+    jobs: Vec<ConsensusJobConfig>,
+}
+
+/// One CLI-configured cross-library consensus job.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Deserialize)]
+struct ConsensusJobConfig {
+    /// Human-readable job name used in logs and, when `output_dir` is set, output paths.
+    name: Option<String>,
+    /// First input search artifact to merge.
+    left_search_json: PathBuf,
+    /// Second input search artifact to merge.
+    right_search_json: PathBuf,
+    /// Optional explicit alias for the first input artifact.
+    #[serde(default)]
+    left_name: Option<String>,
+    /// Optional explicit alias for the second input artifact.
+    #[serde(default)]
+    right_name: Option<String>,
+    /// Optional explicit JSON output path overriding derived batch output locations.
+    #[serde(default)]
+    output_json: PathBuf,
+    /// Optional explicit TSV output path overriding derived batch output locations.
+    #[serde(default)]
+    output_tsv: Option<PathBuf>,
+    /// Consensus-fusion parameters.
+    #[serde(default)]
+    merge: ConsensusMergeParams,
+    /// Output-export options for the merged artifact.
+    #[serde(default)]
+    output: ConsensusOutputConfig,
+}
+
+/// Output-export options for a CLI consensus job.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Deserialize, Default)]
+struct ConsensusOutputConfig {
+    /// Optional query identifier mode overriding the query key stored in the input artifacts.
+    query_key: Option<SearchQueryKey>,
+}
+
 /// Mutable render state for the lightweight CLI progress display.
 #[cfg(not(target_arch = "wasm32"))]
 struct CliProgressState {
@@ -154,6 +204,15 @@ struct ResolvedNetworkOutputs {
     json: PathBuf,
     /// Optional CSV companion directory.
     csv_dir: Option<PathBuf>,
+}
+
+/// Resolved output paths for a consensus job.
+#[cfg(not(target_arch = "wasm32"))]
+struct ResolvedConsensusOutputs {
+    /// Final JSON artifact path.
+    json: PathBuf,
+    /// Optional TSV export path.
+    tsv: Option<PathBuf>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -289,7 +348,10 @@ where
 {
     let _exe = args.next();
     let Some(command) = args.next() else {
-        return Err("usage: spectral-matcher <serve|search|network|metrics|db> ...".to_string());
+        return Err(
+            "usage: spectral-matcher <serve|search|network|consensus|metrics|db> ..."
+                .to_string(),
+        );
     };
     match command.as_str() {
         "serve" => {
@@ -303,6 +365,10 @@ where
         "network" => {
             let path = parse_config_arg(args)?;
             run_network_config(Path::new(&path))
+        }
+        "consensus" => {
+            let path = parse_config_arg(args)?;
+            run_consensus_config(Path::new(&path))
         }
         "metrics" => {
             if args.next().is_some() {
@@ -658,6 +724,70 @@ fn run_network_job(
     Ok(())
 }
 
+/// Loads and runs every consensus job declared in a batch config file.
+#[cfg(not(target_arch = "wasm32"))]
+fn run_consensus_config(path: &Path) -> Result<(), String> {
+    let raw = std::fs::read_to_string(path)
+        .map_err(|err| format!("failed to read {}: {err}", path.display()))?;
+    let config: ConsensusBatchConfig =
+        toml::from_str(&raw).map_err(|err| format!("failed to parse {}: {err}", path.display()))?;
+    if config.jobs.is_empty() {
+        return Err("config must contain at least one [[jobs]] entry".to_string());
+    }
+    let output_dir = config.output_dir;
+    for (idx, job) in config.jobs.into_iter().enumerate() {
+        let label = job
+            .name
+            .clone()
+            .unwrap_or_else(|| format!("job {}", idx + 1));
+        run_consensus_job(&label, output_dir.as_deref(), job)?;
+    }
+    Ok(())
+}
+
+/// Executes a single consensus job from a CLI config file.
+#[cfg(not(target_arch = "wasm32"))]
+fn run_consensus_job(
+    label: &str,
+    batch_output_dir: Option<&Path>,
+    job: ConsensusJobConfig,
+) -> Result<(), String> {
+    let outputs = resolve_consensus_outputs(batch_output_dir, label, &job)?;
+    let left = load_search_artifact(&job.left_search_json)
+        .map_err(|err| format!("{label}: failed to load left search artifact: {err}"))?;
+    let right = load_search_artifact(&job.right_search_json)
+        .map_err(|err| format!("{label}: failed to load right search artifact: {err}"))?;
+    let left_name = resolve_consensus_input_name(
+        job.left_name.as_deref(),
+        &left.library_source_label,
+        "left",
+    );
+    let right_name = resolve_consensus_input_name(
+        job.right_name.as_deref(),
+        &right.library_source_label,
+        "right",
+    );
+    let (left_name, right_name) = ensure_distinct_input_names(left_name, right_name);
+    let artifact = merge_search_artifacts(
+        &left_name,
+        left,
+        &right_name,
+        right,
+        job.merge,
+        job.output.query_key,
+    )
+    .map_err(|err| format!("{label}: consensus merge failed: {err}"))?;
+    let json = serde_json::to_string_pretty(&artifact)
+        .map_err(|err| format!("{label}: failed to serialize consensus JSON: {err}"))?;
+    save_json_to_path(&outputs.json, &json)
+        .map_err(|err| format!("{label}: failed to write consensus JSON: {err}"))?;
+    if let Some(path) = outputs.tsv {
+        save_tsv_to_path(&path, &artifact.tsv)
+            .map_err(|err| format!("{label}: failed to write consensus TSV: {err}"))?;
+    }
+    Ok(())
+}
+
 /// Resolves effective JSON and TSV output paths for a search job.
 #[cfg(not(target_arch = "wasm32"))]
 fn resolve_search_outputs(
@@ -779,6 +909,32 @@ fn save_network_csvs(
     Ok(())
 }
 
+/// Resolves effective JSON and TSV output paths for a consensus job.
+#[cfg(not(target_arch = "wasm32"))]
+fn resolve_consensus_outputs(
+    batch_output_dir: Option<&Path>,
+    label: &str,
+    job: &ConsensusJobConfig,
+) -> Result<ResolvedConsensusOutputs, String> {
+    if !job.output_json.as_os_str().is_empty() {
+        return Ok(ResolvedConsensusOutputs {
+            json: job.output_json.clone(),
+            tsv: job.output_tsv.clone(),
+        });
+    }
+    let Some(root) = batch_output_dir else {
+        return Err(format!(
+            "{label}: missing output path; set top-level `output_dir` or explicit `output_json`"
+        ));
+    };
+    let job_name = output_job_name(label, job.name.as_deref())?;
+    let job_dir = root.join(job_name);
+    Ok(ResolvedConsensusOutputs {
+        json: job_dir.join("consensus.json"),
+        tsv: Some(job_dir.join("consensus.tsv")),
+    })
+}
+
 /// Returns the stable exported node id for CSV output.
 #[cfg(not(target_arch = "wasm32"))]
 fn exported_network_node_id(node: &spectral_matcher::NetworkNode) -> String {
@@ -798,4 +954,46 @@ fn escape_csv(value: &str) -> String {
     } else {
         value.to_string()
     }
+}
+
+/// Loads a previously exported search artifact JSON from disk.
+#[cfg(not(target_arch = "wasm32"))]
+fn load_search_artifact(path: &Path) -> Result<SearchArtifact, String> {
+    let raw = std::fs::read_to_string(path)
+        .map_err(|err| format!("failed to read {}: {err}", path.display()))?;
+    serde_json::from_str(&raw)
+        .map_err(|err| format!("failed to parse {}: {err}", path.display()))
+}
+
+/// Resolves the user-facing alias for one input consensus artifact.
+#[cfg(not(target_arch = "wasm32"))]
+fn resolve_consensus_input_name(explicit: Option<&str>, library_source_label: &str, fallback: &str) -> String {
+    let candidate = explicit
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .or_else(|| {
+            Path::new(library_source_label)
+                .file_stem()
+                .and_then(|value| value.to_str())
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned)
+        })
+        .unwrap_or_else(|| fallback.to_string());
+    candidate
+        .chars()
+        .map(|ch| if ch.is_ascii_alphanumeric() { ch.to_ascii_lowercase() } else { '_' })
+        .collect::<String>()
+        .trim_matches('_')
+        .to_string()
+}
+
+/// Ensures the two consensus input names remain distinct for export and provenance.
+#[cfg(not(target_arch = "wasm32"))]
+fn ensure_distinct_input_names(left: String, right: String) -> (String, String) {
+    if left != right {
+        return (left, right);
+    }
+    (left, format!("{right}_2"))
 }

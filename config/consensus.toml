@@ -1,0 +1,18 @@
+output_dir = "/Users/pma/git_repos/EMI/spectral-matcher/out"
+
+[[jobs]]
+name = "mapp_gnps_isdb_consensus"
+left_search_json = "/Users/pma/git_repos/EMI/spectral-matcher/out/mapp_vs_gnps_lotus/search.json"
+right_search_json = "/Users/pma/git_repos/EMI/spectral-matcher/out/mapp_vs_isdb_lotus/search.json"
+left_name = "gnps"
+right_name = "isdb"
+
+[jobs.merge]
+top_k_per_library = 5
+rrf_k = 10.0
+consensus_bonus = 0.05
+left_weight = 1.0
+right_weight = 1.0
+
+[jobs.output]
+query_key = "FeatureId"

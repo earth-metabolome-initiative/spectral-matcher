@@ -1,5 +1,7 @@
 //! Serializable request, artifact, and job-status types shared across the matcher interfaces.
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
 use crate::export::SearchQueryKey;
@@ -155,6 +157,222 @@ pub struct SearchArtifact {
     pub tsv: String,
 }
 
+/// Parameters controlling post-search consensus fusion across multiple library outputs.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ConsensusMergeParams {
+    /// Maximum rank depth retained from each input artifact before consensus fusion.
+    #[serde(default = "default_consensus_top_k_per_library")]
+    pub top_k_per_library: usize,
+    /// Reciprocal-rank-fusion offset controlling how sharply top ranks are favored.
+    #[serde(default = "default_consensus_rrf_k")]
+    pub rrf_k: f64,
+    /// Additive bonus applied when a consensus group is supported by both inputs.
+    #[serde(default = "default_consensus_bonus")]
+    pub consensus_bonus: f64,
+    /// Relative weight assigned to the left/first input during fusion.
+    #[serde(default = "default_consensus_weight")]
+    pub left_weight: f64,
+    /// Relative weight assigned to the right/second input during fusion.
+    #[serde(default = "default_consensus_weight")]
+    pub right_weight: f64,
+}
+
+impl Default for ConsensusMergeParams {
+    fn default() -> Self {
+        Self {
+            top_k_per_library: default_consensus_top_k_per_library(),
+            rrf_k: default_consensus_rrf_k(),
+            consensus_bonus: default_consensus_bonus(),
+            left_weight: default_consensus_weight(),
+            right_weight: default_consensus_weight(),
+        }
+    }
+}
+
+/// Summary of a single input artifact participating in cross-library consensus fusion.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ConsensusInputSummary {
+    /// Short stable input name used in provenance and export columns.
+    pub name: String,
+    /// Query source label shared across merged inputs.
+    pub query_source_label: String,
+    /// Library source label for this input artifact.
+    pub library_source_label: String,
+    /// Search parameters used to generate the input artifact.
+    pub search: LibrarySearchParams,
+    /// Similarity metric used by the originating search.
+    pub metric: crate::similarity::SimilarityMetric,
+    /// Indicates whether taxonomic reranking was applied in the originating search.
+    pub taxonomic_reranking_applied: bool,
+    /// Taxonomic query used by the originating search, when present.
+    pub taxonomic_query: Option<String>,
+}
+
+/// Serialized result of a merged cross-library consensus job.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ConsensusArtifact {
+    /// Shared source label for the merged query spectra.
+    pub query_source_label: String,
+    /// Query identifier mode used in TSV/JSON convenience exports.
+    pub query_key: SearchQueryKey,
+    /// Query metadata in original query order.
+    pub query_spectra: Vec<SpectrumMetadata>,
+    /// Merge parameters used to produce consensus annotations.
+    pub merge: ConsensusMergeParams,
+    /// Input artifact summaries participating in the merge.
+    pub inputs: Vec<ConsensusInputSummary>,
+    /// One consensus result per query spectrum.
+    pub result: ConsensusArtifactResult,
+    /// Pre-rendered TSV export for convenience.
+    pub tsv: String,
+}
+
+/// Query-oriented consensus results embedded in a [`ConsensusArtifact`].
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct ConsensusArtifactResult {
+    /// One merged row per query spectrum.
+    pub queries: Vec<ConsensusQueryResult>,
+    /// Number of query spectra considered during merging.
+    pub query_count: usize,
+    /// Number of query spectra receiving a merged annotation.
+    pub annotated_query_count: usize,
+}
+
+/// Consensus result for a single query spectrum.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct ConsensusQueryResult {
+    /// Zero-based query spectrum index.
+    pub query_index: usize,
+    /// Winning merged annotation for the query, when any candidate survives fusion.
+    pub annotation: Option<ConsensusAnnotation>,
+}
+
+/// High-level class describing how a consensus annotation was supported.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConsensusClass {
+    /// Only one input artifact supported the final annotation.
+    Singleton,
+    /// Both inputs agreed on the same exact full InChIKey.
+    CrossLibraryExact,
+    /// Both inputs agreed only at the short-InChIKey/scaffold level.
+    CrossLibraryShortInchikey,
+}
+
+impl Default for ConsensusClass {
+    fn default() -> Self {
+        Self::Singleton
+    }
+}
+
+/// Best supporting hit retained from one input artifact for a consensus annotation.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct ConsensusSupportHit {
+    /// Short stable input name such as `gnps` or `isdb`.
+    pub input_name: String,
+    /// Source label of the library that produced this hit.
+    pub library_source_label: String,
+    /// Zero-based library spectrum index in the originating artifact.
+    pub library_index: usize,
+    /// Final one-based rank in the originating artifact.
+    pub rank: usize,
+    /// Original spectral rank before taxonomy reranking, when available.
+    pub rank_before_taxonomy: Option<usize>,
+    /// Spectral similarity score from the originating artifact.
+    pub spectral_score: f64,
+    /// Taxonomic reranking contribution from the originating artifact.
+    pub taxonomic_score: f64,
+    /// Final combined score from the originating artifact.
+    pub combined_score: f64,
+    /// Number of matched fragment peaks in the originating artifact.
+    pub matches: usize,
+    /// Library precursor m/z associated with the support hit.
+    pub precursor_mz: f64,
+    /// MS1 deviation reported for the support hit.
+    pub ms1_deviation_ppm: f64,
+    /// Human-readable preferred name for the support hit.
+    pub raw_name: String,
+    /// Matched organism name, when taxonomy reranking was applied.
+    pub organism_name: Option<String>,
+    /// Matched organism Wikidata identifier, when available.
+    pub organism_wikidata: Option<String>,
+    /// Deepest shared taxonomic rank, when available.
+    pub shared_rank: Option<String>,
+    /// Short InChIKey used for grouping consensus candidates.
+    pub short_inchikey: Option<String>,
+    /// Full InChIKey recovered from the representative library metadata, when available.
+    pub full_inchikey: Option<String>,
+    /// Retained source attributes from the representative library spectrum.
+    pub attributes: BTreeMap<String, String>,
+}
+
+/// Winning consensus annotation and provenance for a query spectrum.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct ConsensusAnnotation {
+    /// Shared grouping key used during consensus fusion, typically a short InChIKey.
+    pub consensus_key: Option<String>,
+    /// Final consensus score after reciprocal-rank fusion and consensus bonus.
+    pub consensus_score: f64,
+    /// Whether the annotation is singleton support, exact cross-library consensus, or scaffold-level consensus.
+    pub consensus_class: ConsensusClass,
+    /// Indicates whether all supporting hits resolved to one exact full InChIKey.
+    pub exact_structure_consensus: bool,
+    /// Input names that contributed evidence to the final annotation.
+    pub support_libraries: Vec<String>,
+    /// Number of unique input libraries supporting the final annotation.
+    pub support_count: usize,
+    /// Number of raw hits collapsed into the final consensus group before per-input deduplication.
+    pub support_hit_count: usize,
+    /// Best retained rank per input library.
+    pub best_rank_by_input: BTreeMap<String, usize>,
+    /// Best retained spectral score per input library.
+    pub best_spectral_score_by_input: BTreeMap<String, f64>,
+    /// Best retained taxonomic score per input library.
+    pub best_taxonomic_score_by_input: BTreeMap<String, f64>,
+    /// Best retained combined score per input library.
+    pub best_combined_score_by_input: BTreeMap<String, f64>,
+    /// Best retained fragment-match count per input library.
+    pub best_matches_by_input: BTreeMap<String, usize>,
+    /// Input name that supplied the representative structure shown to downstream consumers.
+    pub representative_input_name: String,
+    /// Library source label for the representative structure.
+    pub representative_library_source_label: String,
+    /// Zero-based library index of the representative structure.
+    pub representative_library_index: usize,
+    /// Final one-based rank of the representative support hit.
+    pub representative_rank: usize,
+    /// Spectral rank before taxonomy reranking for the representative hit, when available.
+    pub representative_rank_before_taxonomy: Option<usize>,
+    /// Spectral similarity score for the representative hit.
+    pub representative_spectral_score: f64,
+    /// Taxonomic reranking contribution for the representative hit.
+    pub representative_taxonomic_score: f64,
+    /// Final combined score for the representative hit.
+    pub representative_combined_score: f64,
+    /// Fragment-match count for the representative hit.
+    pub representative_matches: usize,
+    /// Precursor m/z for the representative structure.
+    pub representative_precursor_mz: f64,
+    /// MS1 deviation for the representative structure.
+    pub representative_ms1_deviation_ppm: f64,
+    /// Preferred name of the representative structure.
+    pub representative_raw_name: String,
+    /// Matched organism name of the representative structure, when available.
+    pub representative_organism_name: Option<String>,
+    /// Matched organism Wikidata identifier of the representative structure, when available.
+    pub representative_organism_wikidata: Option<String>,
+    /// Deepest shared taxonomic rank for the representative structure, when available.
+    pub representative_shared_rank: Option<String>,
+    /// Short InChIKey for the representative structure, when available.
+    pub representative_short_inchikey: Option<String>,
+    /// Full InChIKey for the representative structure, when available.
+    pub representative_full_inchikey: Option<String>,
+    /// Retained source attributes for the representative structure.
+    pub representative_attributes: BTreeMap<String, String>,
+    /// Best supporting hit retained from each contributing input artifact.
+    pub support_hits: Vec<ConsensusSupportHit>,
+}
+
 /// Search result container embedded in a [`SearchArtifact`].
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct SearchArtifactResult {
@@ -273,4 +491,20 @@ const fn default_min_peaks() -> usize {
 
 const fn default_max_peaks() -> usize {
     1000
+}
+
+const fn default_consensus_top_k_per_library() -> usize {
+    5
+}
+
+const fn default_consensus_rrf_k() -> f64 {
+    10.0
+}
+
+const fn default_consensus_bonus() -> f64 {
+    0.05
+}
+
+const fn default_consensus_weight() -> f64 {
+    1.0
 }

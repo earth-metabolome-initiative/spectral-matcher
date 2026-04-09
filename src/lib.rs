@@ -7,6 +7,7 @@
 //! - export results as JSON/TSV or serve them over HTTP
 
 pub mod api;
+pub mod consensus;
 pub mod databases;
 pub mod export;
 pub mod mgf;
@@ -20,18 +21,22 @@ pub mod taxonomy;
 
 /// API request/response types shared by the CLI, server, and tests.
 pub use api::{
+    ConsensusAnnotation, ConsensusArtifact, ConsensusArtifactResult, ConsensusClass,
+    ConsensusInputSummary, ConsensusMergeParams, ConsensusQueryResult, ConsensusSupportHit,
     HealthResponse, JobCreatedResponse, JobProgress, JobProgressStage, JobStatus,
     JobStatusResponse, MatcherJobResult, NetworkArtifact, NetworkBuildParams, NetworkRequest,
     NetworkSpectrum, ParseConfig, SearchArtifact, SearchArtifactHit, SearchArtifactResult,
     SearchRequest, SearchTaxonomyRequest,
 };
+/// Post-search consensus fusion across two library-search artifacts.
+pub use consensus::merge_search_artifacts;
 /// Curated downloadable spectral database metadata and helpers.
 pub use databases::{SpectralDatabase, resolve_spectral_database, spectral_databases};
 #[cfg(not(target_arch = "wasm32"))]
 pub use databases::download_spectral_database;
 #[cfg(target_arch = "wasm32")]
 pub use export::download_tsv_file;
-pub use export::{SearchQueryKey, export_search_json, export_search_tsv};
+pub use export::{SearchQueryKey, export_consensus_tsv, export_search_json, export_search_tsv};
 #[cfg(not(target_arch = "wasm32"))]
 pub use export::{save_json_to_path, save_tsv_to_path};
 /// Parse inline MGF bytes into a loaded spectrum collection.
