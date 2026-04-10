@@ -71,17 +71,27 @@ name = "mapp_batch_00231"
 input_mgf = "fixtures/mapp_batch_00231.mgf"
 
 [jobs.parse]
-min_peaks = 5
-max_peaks = 1000
+# Original spectrum field reused verbatim as the canonical exported identifier.
+identifier = "FEATURE_ID"
 
 [jobs.build.compute]
-metric = "LinearCosine"
+# Spectral similarity metric used to score spectrum pairs.
+metric = "HungarianCosine"
+# Fragment m/z tolerance in Dalton used during peak matching.
 fragment_mz_tolerance = 0.2
+# Exponent applied to fragment m/z while weighting peaks.
 mz_power = 0.0
+# Exponent applied to fragment intensity while weighting peaks.
 intensity_power = 1.0
+# Number of most intense peaks retained per spectrum for scoring.
+top_n_peaks = 100
 
 [jobs.build]
+# Minimum similarity score required to keep an edge.
 threshold = 0.7
+# Minimum number of matched fragment peaks required to keep an edge.
+min_matched_peaks = 4
+# Maximum number of retained neighbors per node.
 top_k = 10
 ```
 
@@ -102,7 +112,9 @@ With `output_dir = "out"`, the CLI derives output locations from each job `name`
 Notes:
 
 - `threshold` is the minimum similarity score required to keep an edge.
+- `min_matched_peaks` is the minimum number of fragment matches required to keep an edge.
 - `top_k` is the maximum number of retained neighbors per node.
+- `top_n_peaks` limits scoring to the most intense peaks per spectrum.
 - The CLI can appear quiet while computing; for larger jobs that is expected.
 
 ## Available Metrics
@@ -134,15 +146,17 @@ query_mgf = "fixtures/mapp_batch_00231.mgf"
 library_mgf = "/Users/pma/01_large_files/mgf/isdb_lotus_pos_energySum.mgf"
 
 [jobs.parse]
+identifier = "FEATURE_ID"
 min_peaks = 5
 max_peaks = 1000
 
 [jobs.search]
-metric = "LinearCosine"
+metric = "HungarianCosine"
 precursor_mz_tolerance = 0.05
 fragment_mz_tolerance = 0.2
 mz_power = 0.0
 intensity_power = 1.0
+top_n_peaks = 150
 min_matched_peaks = 3
 min_similarity_threshold = 0.7
 top_n = 20
@@ -172,10 +186,13 @@ The TSV uses a compact query identity schema:
 - `query_key_mode`: what that identifier represents, for example `FEATURE_ID`
 - the remaining columns describe the ranked library hit
 
+Each parsed spectrum now carries a canonical `spectrum_id` in the JSON artifacts. This is the exact original value from the identifier field selected in `[jobs.parse]`, and it must be unique within each input MGF. Missing or duplicate selected identifiers now raise a parse error.
+
 Parameter guidance:
 
 - Start with `fragment_mz_tolerance = 0.2` unless you have a reason to tighten or relax fragment matching.
 - `precursor_mz_tolerance = 0.05` is a reasonable first pass for precursor filtering.
+- `top_n_peaks` optionally limits similarity scoring to the most intense peaks per spectrum.
 - `min_matched_peaks = 3` avoids many weak accidental hits.
 - `min_similarity_threshold = 0.7` is fairly strict. If you get too few hits, try `0.6` or `0.5`.
 - `top_n = 20` keeps the best 20 matches per query spectrum.
@@ -259,8 +276,7 @@ Alternatively, you can start the matcher service with `cargo run -- serve` and l
 When exporting a network:
 
 - `nodes.csv` uses a single `node_id` column
-- `node_id` is taken from `FEATURE_ID` when present
-- otherwise it falls back to the internal node index plus one
+- `node_id` is the selected canonical `spectrum_id`
 - `edges.csv` uses the same exported identifiers in `source` and `target`
 
 ## Current Local Examples

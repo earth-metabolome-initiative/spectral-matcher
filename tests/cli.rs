@@ -30,7 +30,9 @@ fn write_file(path: &PathBuf, contents: &str) {
 
 /// Produces a tiny one-spectrum MGF payload for CLI fixture generation.
 fn sample_mgf(name: &str) -> String {
-    format!("BEGIN IONS\nNAME={name}\nPEPMASS=100.0\n10 100\n20 80\n30 50\nEND IONS\n")
+    format!(
+        "BEGIN IONS\nNAME={name}\nFEATURE_ID={name}\nPEPMASS=100.0\n10 100\n20 80\n30 50\nEND IONS\n"
+    )
 }
 
 /// Writes a minimal search artifact fixture for consensus CLI tests.
@@ -42,6 +44,7 @@ fn write_search_artifact(
 ) {
     let queries = vec![SpectrumMetadata {
         id: 0,
+        spectrum_id: "feature_0".to_string(),
         label: "query_0".to_string(),
         raw_name: "query_0".to_string(),
         feature_id: Some("feature_0".to_string()),
@@ -97,6 +100,7 @@ fn library_meta(id: usize, raw_name: &str, inchikey: &str) -> SpectrumMetadata {
     headers.insert("INCHIKEY".to_string(), inchikey.to_string());
     SpectrumMetadata {
         id,
+        spectrum_id: format!("feature_{id}"),
         label: raw_name.to_string(),
         raw_name: raw_name.to_string(),
         feature_id: None,
@@ -165,6 +169,7 @@ query_mgf = "{}"
 library_mgf = "{}"
 
 [jobs.parse]
+identifier = "NAME"
 min_peaks = 1
 max_peaks = 1000
 
@@ -174,6 +179,7 @@ precursor_mz_tolerance = 1.0
 fragment_mz_tolerance = 0.2
 mz_power = 0.0
 intensity_power = 1.0
+top_n_peaks = 3
 min_matched_peaks = 1
 min_similarity_threshold = 0.0
 top_n = 1
@@ -231,6 +237,7 @@ precursor_mz_tolerance = 1.0
 fragment_mz_tolerance = 0.2
 mz_power = 0.0
 intensity_power = 1.0
+top_n_peaks = 3
 min_matched_peaks = 1
 min_similarity_threshold = 0.0
 top_n = 1
@@ -251,6 +258,7 @@ precursor_mz_tolerance = 1.0
 fragment_mz_tolerance = 0.2
 mz_power = 0.0
 intensity_power = 1.0
+top_n_peaks = 3
 min_matched_peaks = 1
 min_similarity_threshold = 0.0
 top_n = 1
@@ -321,6 +329,7 @@ query_mgf = "{}"
 library_mgf = "{}"
 
 [jobs.parse]
+identifier = "NAME"
 min_peaks = 1
 max_peaks = 1000
 
@@ -330,6 +339,7 @@ precursor_mz_tolerance = 0.1
 fragment_mz_tolerance = 0.2
 mz_power = 0.0
 intensity_power = 1.0
+top_n_peaks = 3
 min_matched_peaks = 1
 min_similarity_threshold = 0.0
 top_n = 1
@@ -526,7 +536,7 @@ name = "network"
 input_mgf = "{}"
 
 [jobs.parse]
-min_peaks = 1
+min_peaks = 2
 max_peaks = 1000
 
 [jobs.build.compute]
@@ -534,9 +544,11 @@ metric = "LinearCosine"
 fragment_mz_tolerance = 0.2
 mz_power = 0.0
 intensity_power = 1.0
+top_n_peaks = 2
 
 [jobs.build]
 threshold = 0.0
+min_matched_peaks = 2
 top_k = 5
 "#,
             output_root.display(),

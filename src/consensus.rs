@@ -432,6 +432,7 @@ mod tests {
     fn query_meta(id: usize) -> SpectrumMetadata {
         SpectrumMetadata {
             id,
+            spectrum_id: format!("feature_{id}"),
             label: format!("query_{id}"),
             raw_name: format!("query_{id}"),
             feature_id: Some(format!("feature_{id}")),
@@ -452,6 +453,7 @@ mod tests {
         }
         SpectrumMetadata {
             id,
+            spectrum_id: format!("feature_{id}"),
             label: raw_name.to_string(),
             raw_name: raw_name.to_string(),
             feature_id: None,

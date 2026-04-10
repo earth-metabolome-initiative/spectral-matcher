@@ -70,6 +70,8 @@ struct SearchConfig {
     fragment_mz_tolerance: f64,
     mz_power: f64,
     intensity_power: f64,
+    #[serde(default)]
+    top_n_peaks: Option<usize>,
     precursor_mz_tolerance: f64,
     min_matched_peaks: usize,
     min_similarity_threshold: f64,
@@ -630,7 +632,7 @@ fn run_search_job(label: &str, batch_output_dir: Option<&Path>, job: SearchJobCo
                 fragment_mz_tolerance: job.search.fragment_mz_tolerance,
                 mz_power: job.search.mz_power,
                 intensity_power: job.search.intensity_power,
-                top_n_peaks: None,
+                top_n_peaks: job.search.top_n_peaks,
             },
             precursor_mz_tolerance: job.search.precursor_mz_tolerance,
             min_matched_peaks: job.search.min_matched_peaks,
@@ -938,11 +940,7 @@ fn resolve_consensus_outputs(
 /// Returns the stable exported node id for CSV output.
 #[cfg(not(target_arch = "wasm32"))]
 fn exported_network_node_id(node: &spectral_matcher::NetworkNode) -> String {
-    node.feature_id
-        .as_deref()
-        .filter(|value| !value.trim().is_empty())
-        .map(ToOwned::to_owned)
-        .unwrap_or_else(|| (node.id + 1).to_string())
+    node.spectrum_id.clone()
 }
 
 /// Escapes a CSV cell using minimal quoting.

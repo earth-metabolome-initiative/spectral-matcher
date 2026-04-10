@@ -97,6 +97,7 @@ fn health_and_sync_network_endpoints_work() {
         ),
         mgf_path: None,
         parse: ParseConfig {
+            identifier: "NAME".to_string(),
             min_peaks: 1,
             max_peaks: 1000,
         },
@@ -109,6 +110,7 @@ fn health_and_sync_network_endpoints_work() {
                 top_n_peaks: None,
             },
             threshold: 0.0,
+            min_matched_peaks: 1,
             top_k: 5,
         },
     })
@@ -135,6 +137,7 @@ fn async_search_job_endpoints_work() {
         ),
         library_mgf_path: None,
         parse: ParseConfig {
+            identifier: "NAME".to_string(),
             min_peaks: 1,
             max_peaks: 1000,
         },

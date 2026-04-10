@@ -34,6 +34,8 @@ pub struct ParseStats {
 pub struct SpectrumMetadata {
     /// Zero-based internal spectrum identifier.
     pub id: usize,
+    /// Canonical source identifier used for UI-facing exports and cross-artifact joins.
+    pub spectrum_id: String,
     /// Sanitized label used for display and graph export.
     pub label: String,
     /// Original preferred name selected during parsing.

@@ -30,7 +30,9 @@ use crate::export::{SearchQueryKey, export_search_tsv};
 use crate::mgf::load_mgf_bytes;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::mgf::{NativeLoadMessage, start_native_mgf_load};
-use crate::model::{CandidateHit, LoadedSpectra, SearchResult, SpectrumRecord};
+use crate::model::{
+    CandidateHit, LoadedSpectra, SearchResult, SpectrumRecord,
+};
 #[cfg(target_arch = "wasm32")]
 use crate::network::PairScore;
 #[cfg(target_arch = "wasm32")]
@@ -125,6 +127,7 @@ struct FileFingerprint {
 #[derive(Clone)]
 struct CachedMgf {
     fingerprint: FileFingerprint,
+    identifier: String,
     min_peaks: usize,
     max_peaks: usize,
     loaded: LoadedSpectra,
@@ -295,6 +298,7 @@ pub fn build_network_artifact(request: NetworkRequest) -> Result<NetworkArtifact
             &request.source_label,
             request.mgf_text.as_deref(),
             request.mgf_path.as_deref(),
+            &request.parse.identifier,
             request.parse.min_peaks,
             request.parse.max_peaks,
         )?;
@@ -303,7 +307,7 @@ pub fn build_network_artifact(request: NetworkRequest) -> Result<NetworkArtifact
         #[cfg(not(target_arch = "wasm32"))]
         let pair_scores = score_all_pairs_parallel(&spectra, &scorer)?;
         #[cfg(target_arch = "wasm32")]
-        let pair_scores = score_all_pairs(&spectra, &scorer)?;
+        let pair_scores = score_all_pairs(&spectra, &scorer, request.build.min_matched_peaks.max(1))?;
         let metas = loaded
             .spectra
             .iter()
@@ -346,6 +350,7 @@ pub fn run_search_request(request: SearchRequest) -> Result<SearchArtifact, Stri
             &request.query_source_label,
             request.query_mgf_text.as_deref(),
             request.query_mgf_path.as_deref(),
+            &request.parse.identifier,
             request.parse.min_peaks,
             request.parse.max_peaks,
         )?;
@@ -353,6 +358,7 @@ pub fn run_search_request(request: SearchRequest) -> Result<SearchArtifact, Stri
             &request.library_source_label,
             request.library_mgf_text.as_deref(),
             request.library_mgf_path.as_deref(),
+            &request.parse.identifier,
             request.parse.min_peaks,
             request.parse.max_peaks,
         )?;
@@ -363,7 +369,7 @@ pub fn run_search_request(request: SearchRequest) -> Result<SearchArtifact, Stri
             .transpose()?;
         let search_params =
             effective_search_params(&request.search, library.spectra.len(), taxonomy.is_some());
-        let query_key = request.query_key.unwrap_or(SearchQueryKey::FeatureId);
+        let query_key = request.query_key.unwrap_or(SearchQueryKey::SpectrumId);
         let result = search_library(
             queries.spectra.clone(),
             library.spectra.clone(),
@@ -415,6 +421,7 @@ where
         &request.source_label,
         request.mgf_text.as_deref(),
         request.mgf_path.as_deref(),
+        &request.parse.identifier,
         request.parse.min_peaks,
         request.parse.max_peaks,
         &on_progress,
@@ -429,6 +436,7 @@ where
         &spectra,
         &scorer,
         request.build.threshold.clamp(0.0, 1.0),
+        request.build.min_matched_peaks.max(1),
         request.build.top_k.max(1),
         total as usize,
         Arc::clone(&done),
@@ -481,6 +489,7 @@ where
         &request.query_source_label,
         request.query_mgf_text.as_deref(),
         request.query_mgf_path.as_deref(),
+        &request.parse.identifier,
         request.parse.min_peaks,
         request.parse.max_peaks,
         &on_progress,
@@ -491,6 +500,7 @@ where
         &request.library_source_label,
         request.library_mgf_text.as_deref(),
         request.library_mgf_path.as_deref(),
+        &request.parse.identifier,
         request.parse.min_peaks,
         request.parse.max_peaks,
         &on_progress,
@@ -534,7 +544,7 @@ where
     );
 
     on_progress(JobProgressStage::Finalizing, 0, 1);
-    let query_key = request.query_key.unwrap_or(SearchQueryKey::FeatureId);
+    let query_key = request.query_key.unwrap_or(SearchQueryKey::SpectrumId);
     let result = SearchResult {
         hits,
         query_count: queries.spectra.len(),
@@ -584,11 +594,18 @@ fn load_request_spectra(
     source_label: &str,
     mgf_text: Option<&str>,
     mgf_path: Option<&str>,
+    identifier: &str,
     min_peaks: usize,
     max_peaks: usize,
 ) -> Result<LoadedSpectra, String> {
     if let Some(text) = mgf_text {
-        return load_mgf_bytes(source_label, text.as_bytes(), min_peaks, max_peaks);
+        return load_mgf_bytes(
+            source_label,
+            text.as_bytes(),
+            identifier,
+            min_peaks,
+            max_peaks,
+        );
     }
 
     if mgf_path.is_some() {
@@ -607,6 +624,7 @@ fn load_request_spectra_with_progress<F>(
     source_label: &str,
     mgf_text: Option<&str>,
     mgf_path: Option<&str>,
+    identifier: &str,
     min_peaks: usize,
     max_peaks: usize,
     on_progress: &F,
@@ -617,6 +635,7 @@ where
     if let Some(path) = mgf_path {
         return load_mgf_path_cached_with_progress(
             Path::new(path),
+            identifier,
             min_peaks,
             max_peaks,
             |completed, total| on_progress(stage, completed, total),
@@ -626,7 +645,13 @@ where
     if let Some(text) = mgf_text {
         let total = text.len() as u64;
         on_progress(stage, 0, total.max(1));
-        let loaded = load_mgf_bytes(source_label, text.as_bytes(), min_peaks, max_peaks)?;
+        let loaded = load_mgf_bytes(
+            source_label,
+            text.as_bytes(),
+            identifier,
+            min_peaks,
+            max_peaks,
+        )?;
         on_progress(stage, total.max(1), total.max(1));
         return Ok(loaded);
     }
@@ -638,6 +663,7 @@ where
 #[cfg(not(target_arch = "wasm32"))]
 fn load_mgf_path_cached_with_progress<F>(
     path: &Path,
+    identifier: &str,
     min_peaks: usize,
     max_peaks: usize,
     mut on_progress: F,
@@ -653,6 +679,7 @@ where
     if let Ok(cache) = mgf_cache().lock()
         && let Some(cached) = cache.get(&canonical)
         && cached.fingerprint == fingerprint
+        && cached.identifier == identifier
         && cached.min_peaks == min_peaks
         && cached.max_peaks == max_peaks
     {
@@ -660,7 +687,7 @@ where
         return Ok(cached.loaded.clone());
     }
 
-    let handle = start_native_mgf_load(&canonical, min_peaks, max_peaks)?;
+    let handle = start_native_mgf_load(&canonical, identifier, min_peaks, max_peaks)?;
     on_progress(0, total);
     loop {
         let processed = handle.processed_bytes().min(handle.total_bytes()).max(0);
@@ -674,6 +701,7 @@ where
                             canonical,
                             CachedMgf {
                                 fingerprint,
+                                identifier: identifier.to_string(),
                                 min_peaks,
                                 max_peaks,
                                 loaded: loaded.clone(),
@@ -1047,6 +1075,7 @@ fn score_query_library_pairs(
 fn score_all_pairs(
     spectra: &[SpectrumRecord],
     scorer: &MetricScorer,
+    min_matched_peaks: usize,
 ) -> Result<Vec<PairScore>, String> {
     let mut pairs = Vec::with_capacity(total_pairs(spectra.len()));
     for left_index in 0..spectra.len() {
@@ -1054,6 +1083,9 @@ fn score_all_pairs(
             let left = spectra[left_index].spectrum.as_ref();
             let right = spectra[right_index].spectrum.as_ref();
             let (score, matches) = scorer.similarity(left, right, left_index, right_index)?;
+            if matches < min_matched_peaks {
+                continue;
+            }
             pairs.push(PairScore {
                 left: left_index,
                 right: right_index,
@@ -1071,6 +1103,7 @@ fn score_network_neighbors_parallel(
     spectra: &[SpectrumRecord],
     scorer: &MetricScorer,
     threshold: f64,
+    min_matched_peaks: usize,
     top_k: usize,
     total: usize,
     done_worker: Arc<AtomicUsize>,
@@ -1115,6 +1148,9 @@ fn score_network_neighbors_parallel(
             match scorer.similarity(left, right, left_index, right_index) {
                 Ok((score, matches)) => {
                     if score < threshold {
+                        continue;
+                    }
+                    if matches < min_matched_peaks {
                         continue;
                     }
                     let left_candidate = RankedNeighbor {
@@ -1461,6 +1497,7 @@ mod tests {
         SpectrumRecord {
             meta: SpectrumMetadata {
                 id,
+                spectrum_id: format!("feature_{id}"),
                 label: format!("s{id}"),
                 raw_name: format!("s{id}"),
                 feature_id: None,
@@ -1551,6 +1588,7 @@ mod tests {
             ),
             library_mgf_path: None,
             parse: crate::api::ParseConfig {
+                identifier: "NAME".to_string(),
                 min_peaks: 1,
                 max_peaks: 1000,
             },
@@ -1616,6 +1654,7 @@ mod tests {
             ),
             library_mgf_path: None,
             parse: crate::api::ParseConfig {
+                identifier: "NAME".to_string(),
                 min_peaks: 1,
                 max_peaks: 1000,
             },

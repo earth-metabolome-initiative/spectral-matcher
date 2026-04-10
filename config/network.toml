@@ -1,19 +1,31 @@
 output_dir = "/Users/pma/git_repos/EMI/spectral-matcher/out"
 
 [[jobs]]
+# Human-readable job name used to derive output paths under `output_dir`.
 name = "mapp_batch_00231"
+# Input MGF used to build the network.
 input_mgf = "/Users/pma/git_repos/EMI/spectral-matcher/fixtures/mapp_batch_00231.mgf"
 
 [jobs.parse]
-min_peaks = 5
-max_peaks = 1000
+# Original spectrum field reused verbatim as the canonical exported identifier.
+identifier = "FEATURE_ID"
 
 [jobs.build.compute]
-metric = "LinearCosine"
-fragment_mz_tolerance = 0.2
+# Spectral similarity metric used to score spectrum pairs.
+metric = "HungarianCosine"
+# Fragment m/z tolerance in Dalton used during peak matching.
+fragment_mz_tolerance = 0.02
+# Exponent applied to fragment m/z while weighting peaks.
 mz_power = 0.0
+# Exponent applied to fragment intensity while weighting peaks.
 intensity_power = 1.0
+# Number of most intense peaks retained per spectrum for scoring.
+top_n_peaks = 100
 
 [jobs.build]
+# Minimum similarity score required to keep an edge.
 threshold = 0.7
+# Minimum number of matched fragment peaks required to keep an edge.
+min_matched_peaks = 4
+# Maximum number of retained neighbors per node.
 top_k = 10

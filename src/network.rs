@@ -10,6 +10,7 @@ use crate::model::SpectrumMetadata;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct NetworkNode {
     pub id: usize,
+    pub spectrum_id: String,
     pub label: String,
     pub raw_name: String,
     pub feature_id: Option<String>,
@@ -229,6 +230,7 @@ fn assemble_network(metas: &[SpectrumMetadata], edges: Vec<NetworkEdge>) -> Spec
         .iter()
         .map(|meta| NetworkNode {
             id: meta.id,
+            spectrum_id: meta.spectrum_id.clone(),
             label: meta.label.clone(),
             raw_name: meta.raw_name.clone(),
             feature_id: meta.feature_id.clone(),
@@ -270,6 +272,7 @@ mod tests {
     fn meta(id: usize) -> SpectrumMetadata {
         SpectrumMetadata {
             id,
+            spectrum_id: format!("spectrum_{id}"),
             label: format!("s{id}"),
             raw_name: format!("raw{id}"),
             feature_id: None,

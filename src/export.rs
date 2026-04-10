@@ -10,6 +10,7 @@ use crate::model::{SpectrumMetadata, SpectrumRecord};
 /// Query identifier column used in TSV/JSON exports.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, serde::Deserialize)]
 pub enum SearchQueryKey {
+    SpectrumId,
     FeatureId,
     FeaturelistFeatureId,
     Scans,
@@ -20,7 +21,8 @@ pub enum SearchQueryKey {
 
 impl SearchQueryKey {
     /// All supported query identifier modes in display order.
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 7] = [
+        Self::SpectrumId,
         Self::FeatureId,
         Self::FeaturelistFeatureId,
         Self::Scans,
@@ -32,6 +34,7 @@ impl SearchQueryKey {
     /// Stable export label used in TSV/JSON payloads.
     pub fn label(self) -> &'static str {
         match self {
+            Self::SpectrumId => "spectrum_id",
             Self::FeatureId => "FEATURE_ID",
             Self::FeaturelistFeatureId => "FEATURELIST_FEATURE_ID",
             Self::Scans => "SCANS",
@@ -44,6 +47,7 @@ impl SearchQueryKey {
     /// Returns the identifier value for the selected query-key mode.
     pub fn value_for<T>(self, record: &SpectrumRecord<T>) -> String {
         match self {
+            Self::SpectrumId => record.meta.spectrum_id.clone(),
             Self::FeatureId => record.meta.feature_id.clone().unwrap_or_default(),
             Self::FeaturelistFeatureId => record
                 .meta
@@ -60,6 +64,7 @@ impl SearchQueryKey {
     /// Returns the identifier value for the selected query-key mode using exported metadata.
     pub fn value_for_meta(self, meta: &SpectrumMetadata) -> String {
         match self {
+            Self::SpectrumId => meta.spectrum_id.clone(),
             Self::FeatureId => meta.feature_id.clone().unwrap_or_default(),
             Self::FeaturelistFeatureId => meta.featurelist_feature_id.clone().unwrap_or_default(),
             Self::Scans => meta.scans.clone().unwrap_or_default(),
@@ -383,6 +388,7 @@ struct JsonSearchExport<'a> {
 struct JsonSearchRow {
     query_export_key: String,
     query_node_id: usize,
+    query_spectrum_id: String,
     query_feature_id: Option<String>,
     query_featurelist_feature_id: Option<String>,
     query_scans: Option<String>,
@@ -420,6 +426,7 @@ pub fn export_search_json<TQ, TL>(
             Some(JsonSearchRow {
                 query_export_key: query_key.value_for(query),
                 query_node_id: query.meta.id,
+                query_spectrum_id: query.meta.spectrum_id.clone(),
                 query_feature_id: query.meta.feature_id.clone(),
                 query_featurelist_feature_id: query.meta.featurelist_feature_id.clone(),
                 query_scans: query.meta.scans.clone(),
@@ -589,6 +596,7 @@ mod tests {
         SpectrumRecord {
             meta: SpectrumMetadata {
                 id,
+                spectrum_id: format!("feature_{id}"),
                 label: format!("label_{id}"),
                 raw_name: raw_name.to_string(),
                 feature_id: Some(format!("feature_{id}")),

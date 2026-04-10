@@ -13,6 +13,9 @@ use crate::similarity::ComputeParams;
 /// Generic parsing limits applied while reading MGF data.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ParseConfig {
+    /// Exact MGF header name reused verbatim as the canonical exported spectrum identifier.
+    #[serde(default = "default_identifier_header")]
+    pub identifier: String,
     /// Minimum number of retained peaks required for a spectrum to be accepted.
     #[serde(default = "default_min_peaks")]
     pub min_peaks: usize,
@@ -24,6 +27,7 @@ pub struct ParseConfig {
 impl Default for ParseConfig {
     fn default() -> Self {
         Self {
+            identifier: default_identifier_header(),
             min_peaks: default_min_peaks(),
             max_peaks: default_max_peaks(),
         }
@@ -37,6 +41,9 @@ pub struct NetworkBuildParams {
     pub compute: ComputeParams,
     /// Minimum similarity score required to keep an edge.
     pub threshold: f64,
+    /// Minimum number of matched fragment peaks required to keep an edge.
+    #[serde(default = "default_network_min_matched_peaks")]
+    pub min_matched_peaks: usize,
     /// Maximum number of retained neighbors per node before graph assembly.
     pub top_k: usize,
 }
@@ -493,8 +500,16 @@ const fn default_max_peaks() -> usize {
     1000
 }
 
+fn default_identifier_header() -> String {
+    "FEATURE_ID".to_string()
+}
+
 const fn default_consensus_top_k_per_library() -> usize {
     5
+}
+
+const fn default_network_min_matched_peaks() -> usize {
+    1
 }
 
 const fn default_consensus_rrf_k() -> f64 {

@@ -1,6 +1,6 @@
 //! MGF parsing and native/wasm loading helpers.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::io::{BufRead, Cursor};
 #[cfg(not(target_arch = "wasm32"))]
 use std::path::Path;
@@ -14,7 +14,9 @@ use mass_spectrometry::prelude::{GenericSpectrum, SpectrumAlloc, SpectrumMut};
 #[cfg(not(target_arch = "wasm32"))]
 use rayon::prelude::*;
 
-use crate::model::{LoadedSpectra, ParseStats, SpectrumMetadata, SpectrumRecord};
+use crate::model::{
+    LoadedSpectra, ParseStats, SpectrumMetadata, SpectrumRecord,
+};
 
 #[derive(Clone, Debug)]
 struct ParsedSpectrum {
@@ -78,6 +80,7 @@ impl NativeLoadHandle {
 #[cfg(not(target_arch = "wasm32"))]
 pub fn load_mgf_path(
     path: &Path,
+    identifier: &str,
     min_peaks: usize,
     max_peaks: usize,
 ) -> Result<LoadedSpectra, String> {
@@ -86,7 +89,8 @@ pub fn load_mgf_path(
 
     let file = File::open(path).map_err(|err| format!("cannot open {}: {err}", path.display()))?;
     let (parsed, stats) = parse_mgf_reader_local(BufReader::new(file), min_peaks, max_peaks)?;
-    let spectra = to_records(parsed)?;
+    let spectra = to_records(parsed, identifier)?;
+    ensure_unique_spectrum_ids(&spectra)?;
     Ok(LoadedSpectra {
         source_label: path.display().to_string(),
         spectra,
@@ -98,12 +102,14 @@ pub fn load_mgf_path(
 #[cfg(not(target_arch = "wasm32"))]
 pub fn start_native_mgf_load(
     path: &Path,
+    identifier: &str,
     min_peaks: usize,
     max_peaks: usize,
 ) -> Result<NativeLoadHandle, String> {
     use std::fs::File;
     use std::io::BufReader;
 
+    let identifier = identifier.to_string();
     let source_label = path.display().to_string();
     let total_bytes = std::fs::metadata(path)
         .map_err(|err| format!("cannot stat {}: {err}", path.display()))?
@@ -137,13 +143,17 @@ pub fn start_native_mgf_load(
             }
         };
 
-        let spectra = match to_records(parsed) {
+        let spectra = match to_records(parsed, &identifier) {
             Ok(spectra) => spectra,
             Err(err) => {
                 let _ = tx.send(NativeLoadMessage::Failed(err));
                 return;
             }
         };
+        if let Err(err) = ensure_unique_spectrum_ids(&spectra) {
+            let _ = tx.send(NativeLoadMessage::Failed(err));
+            return;
+        }
 
         progress_bytes.store(total_bytes, Ordering::Relaxed);
         progress_accepted.store(stats.accepted, Ordering::Relaxed);
@@ -169,11 +179,13 @@ pub fn start_native_mgf_load(
 pub fn load_mgf_bytes(
     source_label: &str,
     bytes: &[u8],
+    identifier: &str,
     min_peaks: usize,
     max_peaks: usize,
 ) -> Result<LoadedSpectra, String> {
     let (parsed, stats) = parse_mgf_reader_local(Cursor::new(bytes), min_peaks, max_peaks)?;
-    let spectra = to_records(parsed)?;
+    let spectra = to_records(parsed, identifier)?;
+    ensure_unique_spectrum_ids(&spectra)?;
     Ok(LoadedSpectra {
         source_label: source_label.to_string(),
         spectra,
@@ -181,23 +193,46 @@ pub fn load_mgf_bytes(
     })
 }
 
+fn selected_spectrum_id(
+    spec: &ParsedSpectrum,
+    identifier: &str,
+) -> Result<String, String> {
+    let value = spec.headers.get(identifier).map(String::as_str).ok_or_else(|| {
+        format!(
+            "missing required spectrum identifier header {identifier} for spectrum '{}'",
+            spec.raw_name
+        )
+    })?;
+
+    if value.is_empty() {
+        return Err(format!(
+            "empty required spectrum identifier header {identifier} for spectrum '{}'",
+            spec.raw_name
+        ));
+    }
+
+    Ok(value.to_string())
+}
+
 /// Starts a browser-side file load for wasm callers.
 #[cfg(target_arch = "wasm32")]
 pub fn load_mgf_file_for_wasm(
     source_label: &str,
     file: web_sys::File,
+    identifier: &str,
     min_peaks: usize,
     max_peaks: usize,
 ) -> Result<poll_promise::Promise<Result<LoadedSpectra, String>>, String> {
     use wasm_bindgen_futures::JsFuture;
 
     let source_label = source_label.to_string();
+    let identifier = identifier.to_string();
     Ok(poll_promise::Promise::spawn_local(async move {
         let array_buffer = JsFuture::from(file.array_buffer())
             .await
             .map_err(|err| format!("failed to read file: {err:?}"))?;
         let bytes = js_sys::Uint8Array::new(&array_buffer).to_vec();
-        load_mgf_bytes(&source_label, &bytes, min_peaks, max_peaks)
+        load_mgf_bytes(&source_label, &bytes, &identifier, min_peaks, max_peaks)
     }))
 }
 
@@ -401,7 +436,12 @@ fn sanitize_name(raw_name: &str) -> String {
     }
 }
 
-fn parsed_spectrum_to_record(idx: usize, spec: ParsedSpectrum) -> Result<SpectrumRecord, String> {
+fn parsed_spectrum_to_record(
+    idx: usize,
+    spec: ParsedSpectrum,
+    identifier: &str,
+) -> Result<SpectrumRecord, String> {
+    let spectrum_id = selected_spectrum_id(&spec, identifier)?;
     let mut spectrum = GenericSpectrum::with_capacity(spec.precursor_mz, spec.peaks.len())
         .map_err(|err| format!("failed to create spectrum capacity: {err:?}"))?;
     for (mz, intensity) in &spec.peaks {
@@ -418,6 +458,7 @@ fn parsed_spectrum_to_record(idx: usize, spec: ParsedSpectrum) -> Result<Spectru
     Ok(SpectrumRecord {
         meta: SpectrumMetadata {
             id: idx,
+            spectrum_id,
             label,
             raw_name: spec.raw_name,
             feature_id: spec.feature_id,
@@ -435,21 +476,47 @@ fn parsed_spectrum_to_record(idx: usize, spec: ParsedSpectrum) -> Result<Spectru
     })
 }
 
+fn ensure_unique_spectrum_ids(records: &[SpectrumRecord]) -> Result<(), String> {
+    let mut seen: HashMap<&str, usize> = HashMap::new();
+    for record in records {
+        let spectrum_id = record.meta.spectrum_id.as_str();
+        if spectrum_id.is_empty() {
+            return Err(format!(
+                "spectrum {} resolved to an empty spectrum_id",
+                record.meta.id
+            ));
+        }
+        if let Some(previous) = seen.insert(spectrum_id, record.meta.id) {
+            return Err(format!(
+                "duplicate spectrum_id '{spectrum_id}' in input MGF (records {previous} and {})",
+                record.meta.id
+            ));
+        }
+    }
+    Ok(())
+}
+
 #[cfg(not(target_arch = "wasm32"))]
-fn to_records(parsed: Vec<ParsedSpectrum>) -> Result<Vec<SpectrumRecord>, String> {
+fn to_records(
+    parsed: Vec<ParsedSpectrum>,
+    identifier: &str,
+) -> Result<Vec<SpectrumRecord>, String> {
     parsed
         .into_par_iter()
         .enumerate()
-        .map(|(idx, spec)| parsed_spectrum_to_record(idx, spec))
+        .map(|(idx, spec)| parsed_spectrum_to_record(idx, spec, identifier))
         .collect()
 }
 
 #[cfg(target_arch = "wasm32")]
-fn to_records(parsed: Vec<ParsedSpectrum>) -> Result<Vec<SpectrumRecord>, String> {
+fn to_records(
+    parsed: Vec<ParsedSpectrum>,
+    identifier: &str,
+) -> Result<Vec<SpectrumRecord>, String> {
     parsed
         .into_iter()
         .enumerate()
-        .map(|(idx, spec)| parsed_spectrum_to_record(idx, spec))
+        .map(|(idx, spec)| parsed_spectrum_to_record(idx, spec, identifier))
         .collect()
 }
 
@@ -470,7 +537,8 @@ PEPMASS=123.45
 END IONS
 "#;
 
-        let loaded = load_mgf_bytes("test.mgf", input, 2, 100).expect("mgf should parse");
+        let loaded = load_mgf_bytes("test.mgf", input, "NAME", 2, 100)
+            .expect("mgf should parse");
         let meta = &loaded.spectra[0].meta;
         assert_eq!(meta.headers.get("NAME"), Some(&"Example".to_string()));
         assert_eq!(meta.headers.get("ADDUCT"), Some(&"[M+H]+".to_string()));
@@ -494,13 +562,38 @@ PRECURSOR_MZ=321.0
 END IONS
 "#;
 
-        let loaded = load_mgf_bytes("test.mgf", input, 2, 100).expect("mgf should parse");
+        let loaded = load_mgf_bytes("test.mgf", input, "FEATURE_ID", 2, 100)
+            .expect("mgf should parse");
         let meta = &loaded.spectra[0].meta;
         assert_eq!(meta.raw_name, "Title A");
+        assert_eq!(meta.spectrum_id, "feat-1");
         assert_eq!(meta.feature_id.as_deref(), Some("feat-1"));
         assert_eq!(meta.featurelist_feature_id.as_deref(), Some("featlist-2"));
         assert_eq!(meta.scans.as_deref(), Some("42"));
         assert_eq!(meta.filename.as_deref(), Some("file.mgf"));
         assert_eq!(meta.source_scan_usi.as_deref(), Some("mzspec:abc"));
+    }
+
+    #[test]
+    fn rejects_duplicate_spectrum_ids() {
+        let input = br#"
+BEGIN IONS
+FEATURE_ID=dup
+PEPMASS=100
+10 100
+END IONS
+BEGIN IONS
+FEATURE_ID=dup
+PEPMASS=101
+20 50
+END IONS
+"#;
+
+        let err = match load_mgf_bytes("test.mgf", input, "FEATURE_ID", 1, 100)
+        {
+            Ok(_) => panic!("duplicate ids should fail"),
+            Err(err) => err,
+        };
+        assert!(err.contains("duplicate spectrum_id 'dup'"));
     }
 }

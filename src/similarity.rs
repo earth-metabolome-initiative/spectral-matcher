@@ -5,7 +5,8 @@ use std::sync::Arc;
 use mass_spectrometry::prelude::{
     GenericSpectrum, HungarianCosine, LinearCosine, LinearEntropy, ModifiedHungarianCosine,
     ModifiedLinearCosine, ModifiedLinearEntropy, MsEntropyCleanSpectrum, ScalarSimilarity,
-    SiriusMergeClosePeaks, SpectralProcessor, SpectrumAlloc, SpectrumMut,
+    SimilarityComputationError, SiriusMergeClosePeaks, SpectralProcessor, SpectrumAlloc,
+    SpectrumMut,
 };
 use serde::{Deserialize, Serialize};
 
@@ -208,12 +209,31 @@ impl MetricScorer {
             MetricScorerInner::LinearEntropy(sim) => sim.similarity(left, right),
             MetricScorerInner::ModifiedLinearEntropy(sim) => sim.similarity(left, right),
         };
-        result.map_err(|err| {
-            format!(
+        result.map_err(|err| self.format_similarity_error(err, left_idx, right_idx))
+    }
+
+    /// Formats backend similarity failures into a user-facing message.
+    fn format_similarity_error(
+        &self,
+        err: SimilarityComputationError,
+        left_idx: usize,
+        right_idx: usize,
+    ) -> String {
+        match (self.metric, err) {
+            (
+                SimilarityMetric::LinearCosine | SimilarityMetric::ModifiedLinearCosine,
+                SimilarityComputationError::InvalidPeakSpacing(side),
+            ) => format!(
+                "{} failed for pair ({left_idx},{right_idx}): InvalidPeakSpacing(\"{side}\"). \
+This metric requires well-separated peaks (> 2 * fragment_mz_tolerance). \
+Use HungarianCosine or ModifiedHungarianCosine for general-purpose scoring.",
+                self.metric.label()
+            ),
+            (_, err) => format!(
                 "{} failed for pair ({left_idx},{right_idx}): {err:?}",
                 self.metric.label()
-            )
-        })
+            ),
+        }
     }
 }
 
@@ -310,6 +330,7 @@ mod tests {
         SpectrumRecord {
             meta: SpectrumMetadata {
                 id,
+                spectrum_id: format!("feature_{id}"),
                 label: format!("s{id}"),
                 raw_name: format!("raw{id}"),
                 feature_id: None,
