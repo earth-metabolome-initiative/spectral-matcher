@@ -377,6 +377,7 @@ pub fn run_search_request(request: SearchRequest) -> Result<SearchArtifact, Stri
         )?;
         let enriched = build_search_artifact_result(
             result,
+            &queries.spectra,
             &library.spectra,
             taxonomy.as_ref(),
             request.search.top_n,
