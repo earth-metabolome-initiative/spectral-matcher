@@ -98,6 +98,8 @@ fn health_and_sync_network_endpoints_work() {
         mgf_path: None,
         parse: ParseConfig {
             identifier: "NAME".to_string(),
+            query_identifier: None,
+            library_identifier: None,
             min_peaks: 1,
             max_peaks: 1000,
         },
@@ -138,6 +140,8 @@ fn async_search_job_endpoints_work() {
         library_mgf_path: None,
         parse: ParseConfig {
             identifier: "NAME".to_string(),
+            query_identifier: None,
+            library_identifier: None,
             min_peaks: 1,
             max_peaks: 1000,
         },

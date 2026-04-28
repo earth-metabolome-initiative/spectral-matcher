@@ -7,6 +7,7 @@ library_mgf = "/Users/pma/01_large_files/mgf/isdb_lotus_pos_energySum.mgf"
 
 [jobs.parse]
 identifier = "FEATURE_ID"
+library_identifier = "INCHIKEY"
 min_peaks = 5
 max_peaks = 1000
 
@@ -24,6 +25,8 @@ top_n = 20
 [jobs.taxonomy]
 query = "Withania somnifera"
 lotus_csv = "/Users/pma/01_large_files/lotus/230106_frozen_metadata.csv"
+validate_with_otol = true
+otol_context = "Flowering plants"
 
 [jobs.output]
 query_key = "FeatureId"

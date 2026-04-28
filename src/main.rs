@@ -91,6 +91,10 @@ struct SearchOutputConfig {
 struct SearchTaxonomyConfig {
     query: String,
     lotus_csv: PathBuf,
+    #[serde(default)]
+    validate_with_otol: bool,
+    #[serde(default)]
+    otol_context: Option<String>,
 }
 
 /// Batch config for one or more network-build jobs.
@@ -616,8 +620,15 @@ fn run_search_config(path: &Path) -> Result<(), String> {
 
 /// Executes a single search job from a CLI config file.
 #[cfg(not(target_arch = "wasm32"))]
-fn run_search_job(label: &str, batch_output_dir: Option<&Path>, job: SearchJobConfig) -> Result<(), String> {
+fn run_search_job(
+    label: &str,
+    batch_output_dir: Option<&Path>,
+    job: SearchJobConfig,
+) -> Result<(), String> {
     let outputs = resolve_search_outputs(batch_output_dir, label, &job)?;
+    if let Some(taxonomy) = job.taxonomy.as_ref() {
+        validate_search_taxonomy_query(label, taxonomy)?;
+    }
     let request = SearchRequest {
         query_source_label: job.query_mgf.display().to_string(),
         query_mgf_text: None,
@@ -666,6 +677,32 @@ fn run_search_job(label: &str, batch_output_dir: Option<&Path>, job: SearchJobCo
         save_tsv_to_path(&path, &artifact.tsv)
             .map_err(|err| format!("{label}: failed to write TSV output: {err}"))?;
     }
+    Ok(())
+}
+
+/// Applies optional OpenTree validation to a CLI taxonomic query before search execution.
+#[cfg(not(target_arch = "wasm32"))]
+fn validate_search_taxonomy_query(
+    label: &str,
+    taxonomy: &SearchTaxonomyConfig,
+) -> Result<(), String> {
+    if !taxonomy.validate_with_otol {
+        return Ok(());
+    }
+
+    let accepted = spectral_matcher::validate_otol_taxon_name(
+        &taxonomy.query,
+        taxonomy.otol_context.as_deref(),
+    )
+    .map_err(|err| format!("[search:{label}] {err}"))?;
+    eprintln!(
+        "[search:{label}] OTOL accepted taxon: {}{}",
+        accepted.accepted_name,
+        accepted
+            .ott_id
+            .map(|ott_id| format!(" (ott_id {ott_id})"))
+            .unwrap_or_default()
+    );
     Ok(())
 }
 

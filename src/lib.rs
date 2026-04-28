@@ -62,6 +62,8 @@ pub use search::{
 pub use search::{build_network_artifact_with_progress, run_search_request_with_progress};
 #[cfg(not(target_arch = "wasm32"))]
 pub use server::serve;
+#[cfg(not(target_arch = "wasm32"))]
+pub use taxonomy::{OtolAcceptedTaxon, OtolTaxonMatch, validate_otol_taxon_name};
 /// Similarity configuration and scorer construction helpers.
 pub use similarity::{
     ComputeParams, MetricScorer, SimilarityMetric, preprocess_spectra_for_metric,

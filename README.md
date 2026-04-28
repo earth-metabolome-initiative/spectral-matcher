@@ -147,6 +147,7 @@ library_mgf = "/Users/pma/01_large_files/mgf/isdb_lotus_pos_energySum.mgf"
 
 [jobs.parse]
 identifier = "FEATURE_ID"
+library_identifier = "INCHIKEY"
 min_peaks = 5
 max_peaks = 1000
 

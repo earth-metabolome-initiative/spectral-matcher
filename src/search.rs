@@ -350,7 +350,7 @@ pub fn run_search_request(request: SearchRequest) -> Result<SearchArtifact, Stri
             &request.query_source_label,
             request.query_mgf_text.as_deref(),
             request.query_mgf_path.as_deref(),
-            &request.parse.identifier,
+            request.parse.query_identifier(),
             request.parse.min_peaks,
             request.parse.max_peaks,
         )?;
@@ -358,7 +358,7 @@ pub fn run_search_request(request: SearchRequest) -> Result<SearchArtifact, Stri
             &request.library_source_label,
             request.library_mgf_text.as_deref(),
             request.library_mgf_path.as_deref(),
-            &request.parse.identifier,
+            request.parse.library_identifier(),
             request.parse.min_peaks,
             request.parse.max_peaks,
         )?;
@@ -489,7 +489,7 @@ where
         &request.query_source_label,
         request.query_mgf_text.as_deref(),
         request.query_mgf_path.as_deref(),
-        &request.parse.identifier,
+        request.parse.query_identifier(),
         request.parse.min_peaks,
         request.parse.max_peaks,
         &on_progress,
@@ -500,7 +500,7 @@ where
         &request.library_source_label,
         request.library_mgf_text.as_deref(),
         request.library_mgf_path.as_deref(),
-        &request.parse.identifier,
+        request.parse.library_identifier(),
         request.parse.min_peaks,
         request.parse.max_peaks,
         &on_progress,
@@ -1589,6 +1589,8 @@ mod tests {
             library_mgf_path: None,
             parse: crate::api::ParseConfig {
                 identifier: "NAME".to_string(),
+                query_identifier: None,
+                library_identifier: None,
                 min_peaks: 1,
                 max_peaks: 1000,
             },
@@ -1655,6 +1657,8 @@ mod tests {
             library_mgf_path: None,
             parse: crate::api::ParseConfig {
                 identifier: "NAME".to_string(),
+                query_identifier: None,
+                library_identifier: None,
                 min_peaks: 1,
                 max_peaks: 1000,
             },

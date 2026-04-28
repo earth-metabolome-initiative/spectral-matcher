@@ -5,6 +5,9 @@ use std::io::Read;
 
 use crate::model::SpectrumRecord;
 
+#[cfg(not(target_arch = "wasm32"))]
+const OTOL_TNRS_MATCH_NAMES_URL: &str = "https://api.opentreeoflife.org/v3/tnrs/match_names";
+
 const TAXONOMY_COLUMN_NAMES: [&str; 10] = [
     "organism_taxonomy_01domain",
     "organism_taxonomy_02kingdom",
@@ -166,6 +169,32 @@ pub struct ResolvedLotusQuery {
     pub lineage: TaxonomyLineage,
 }
 
+/// Accepted OpenTree taxon returned by strict TNRS validation.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Clone, Debug, PartialEq)]
+pub struct OtolAcceptedTaxon {
+    pub input_name: String,
+    pub accepted_name: String,
+    pub matched_name: String,
+    pub ott_id: Option<u64>,
+    pub rank: Option<String>,
+    pub score: f64,
+}
+
+/// Candidate OpenTree match used in validation errors and tests.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Clone, Debug, PartialEq)]
+pub struct OtolTaxonMatch {
+    pub accepted_name: String,
+    pub matched_name: String,
+    pub ott_id: Option<u64>,
+    pub rank: Option<String>,
+    pub score: f64,
+    pub is_synonym: bool,
+    pub is_approximate_match: bool,
+    pub is_suppressed: bool,
+}
+
 /// Best taxonomic match found for a library candidate.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TaxonomicMatch {
@@ -270,6 +299,44 @@ pub fn load_lotus_path(path: &std::path::Path) -> Result<LotusMetadataIndex, Str
     let bytes =
         std::fs::read(path).map_err(|err| format!("cannot read {}: {err}", path.display()))?;
     load_lotus_bytes(&bytes)
+}
+
+/// Validates a taxon name against the OpenTree Taxonomic Name Resolution Service.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn validate_otol_taxon_name(
+    query: &str,
+    context_name: Option<&str>,
+) -> Result<OtolAcceptedTaxon, String> {
+    let query = query.trim();
+    if query.is_empty() {
+        return Err("OTOL validation requires a non-empty taxon query".to_string());
+    }
+
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(20))
+        .user_agent(concat!(
+            "spectral-matcher/",
+            env!("CARGO_PKG_VERSION"),
+            " taxon-validation"
+        ))
+        .build()
+        .map_err(|err| format!("failed to build OTOL HTTP client: {err}"))?;
+    let response = client
+        .post(OTOL_TNRS_MATCH_NAMES_URL)
+        .json(&OtolMatchNamesRequest {
+            names: vec![query],
+            context_name,
+            do_approximate_matching: true,
+            include_suppressed: false,
+        })
+        .send()
+        .map_err(|err| format!("failed to validate '{query}' with OTOL TNRS: {err}"))?
+        .error_for_status()
+        .map_err(|err| format!("OTOL TNRS rejected validation for '{query}': {err}"))?
+        .json::<OtolMatchNamesResponse>()
+        .map_err(|err| format!("failed to parse OTOL TNRS response for '{query}': {err}"))?;
+
+    validate_otol_response(query, response)
 }
 
 /// Extracts a short InChIKey candidate from a spectrum record's headers.
@@ -437,6 +504,191 @@ fn normalized_qid(value: &str) -> Option<String> {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(serde::Serialize)]
+struct OtolMatchNamesRequest<'a> {
+    names: Vec<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    context_name: Option<&'a str>,
+    do_approximate_matching: bool,
+    include_suppressed: bool,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(serde::Deserialize)]
+struct OtolMatchNamesResponse {
+    #[serde(default)]
+    unmatched_names: Vec<String>,
+    #[serde(default)]
+    results: Vec<OtolNameResult>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(serde::Deserialize)]
+struct OtolNameResult {
+    #[serde(default)]
+    matches: Vec<OtolApiMatch>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(serde::Deserialize)]
+struct OtolApiMatch {
+    #[serde(default)]
+    matched_name: Option<String>,
+    #[serde(default)]
+    score: Option<f64>,
+    #[serde(default)]
+    is_approximate_match: bool,
+    #[serde(default)]
+    is_synonym: bool,
+    #[serde(default)]
+    taxon: Option<OtolApiTaxon>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(serde::Deserialize)]
+struct OtolApiTaxon {
+    #[serde(default)]
+    ott_id: Option<u64>,
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    unique_name: Option<String>,
+    #[serde(default)]
+    rank: Option<String>,
+    #[serde(default)]
+    is_suppressed: bool,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn validate_otol_response(
+    query: &str,
+    response: OtolMatchNamesResponse,
+) -> Result<OtolAcceptedTaxon, String> {
+    let candidates = otol_candidates(response.results);
+    let accepted: Vec<&OtolTaxonMatch> = candidates
+        .iter()
+        .filter(|candidate| is_strict_otol_acceptance(candidate))
+        .collect();
+
+    match accepted.as_slice() {
+        [candidate] => Ok(OtolAcceptedTaxon {
+            input_name: query.to_string(),
+            accepted_name: candidate.accepted_name.clone(),
+            matched_name: candidate.matched_name.clone(),
+            ott_id: candidate.ott_id,
+            rank: candidate.rank.clone(),
+            score: candidate.score,
+        }),
+        [] => Err(format_otol_validation_error(
+            query,
+            &response.unmatched_names,
+            &candidates,
+        )),
+        _ => Err(format!(
+            "OTOL validation for '{}' is ambiguous; choose one accepted match explicitly: {}",
+            query,
+            format_otol_candidates(&candidates)
+        )),
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn is_strict_otol_acceptance(candidate: &OtolTaxonMatch) -> bool {
+    candidate.score >= 0.999_999
+        && !candidate.is_approximate_match
+        && !candidate.is_synonym
+        && !candidate.is_suppressed
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn otol_candidates(results: Vec<OtolNameResult>) -> Vec<OtolTaxonMatch> {
+    let mut candidates = results
+        .into_iter()
+        .flat_map(|result| {
+            result.matches.into_iter().filter_map(move |matched| {
+                let taxon = matched.taxon?;
+                let accepted_name = taxon.name.or(taxon.unique_name)?;
+                let matched_name = matched
+                    .matched_name
+                    .filter(|value| !value.trim().is_empty())
+                    .unwrap_or_else(|| accepted_name.clone());
+                Some(OtolTaxonMatch {
+                    accepted_name,
+                    matched_name,
+                    ott_id: taxon.ott_id,
+                    rank: taxon.rank,
+                    score: matched.score.unwrap_or(0.0),
+                    is_synonym: matched.is_synonym,
+                    is_approximate_match: matched.is_approximate_match,
+                    is_suppressed: taxon.is_suppressed,
+                })
+            })
+        })
+        .collect::<Vec<_>>();
+
+    candidates.sort_by(|left, right| {
+        right
+            .score
+            .total_cmp(&left.score)
+            .then_with(|| left.is_approximate_match.cmp(&right.is_approximate_match))
+            .then_with(|| left.is_synonym.cmp(&right.is_synonym))
+            .then_with(|| left.is_suppressed.cmp(&right.is_suppressed))
+            .then_with(|| left.accepted_name.cmp(&right.accepted_name))
+    });
+    candidates
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn format_otol_validation_error(
+    query: &str,
+    unmatched_names: &[String],
+    candidates: &[OtolTaxonMatch],
+) -> String {
+    if candidates.is_empty() {
+        if unmatched_names
+            .iter()
+            .any(|name| name.eq_ignore_ascii_case(query))
+        {
+            return format!("OTOL validation failed for '{query}': no match found");
+        }
+        return format!("OTOL validation failed for '{query}': no acceptable match found");
+    }
+
+    format!(
+        "OTOL validation failed for '{}': query is not an exact accepted OTOL name; suggested matches: {}",
+        query,
+        format_otol_candidates(candidates)
+    )
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn format_otol_candidates(candidates: &[OtolTaxonMatch]) -> String {
+    candidates
+        .iter()
+        .take(5)
+        .map(|candidate| {
+            let ott_id = candidate
+                .ott_id
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "unknown".to_string());
+            let rank = candidate.rank.as_deref().unwrap_or("unknown");
+            format!(
+                "{} (matched '{}', ott_id {}, rank {}, score {:.3}, synonym {}, approximate {}, suppressed {})",
+                candidate.accepted_name,
+                candidate.matched_name,
+                ott_id,
+                rank,
+                candidate.score,
+                candidate.is_synonym,
+                candidate.is_approximate_match,
+                candidate.is_suppressed
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
 #[cfg(test)]
 mod tests {
     use super::{TaxonomicRank, load_lotus_bytes};
@@ -483,5 +735,98 @@ mod tests {
             Some("Withania")
         );
         assert_eq!(by_genus.lineage.value_for(TaxonomicRank::Species), None);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn otol_validation_accepts_exact_non_synonym() {
+        let response = serde_json::from_str::<super::OtolMatchNamesResponse>(
+            r#"{
+              "unmatched_names": [],
+              "results": [{
+                "name": "Withania somnifera",
+                "matches": [{
+                  "matched_name": "Withania somnifera",
+                  "score": 1.0,
+                  "is_approximate_match": false,
+                  "is_synonym": false,
+                  "taxon": {
+                    "ott_id": 512345,
+                    "name": "Withania somnifera",
+                    "rank": "species",
+                    "is_suppressed": false
+                  }
+                }]
+              }]
+            }"#,
+        )
+        .expect("response");
+
+        let accepted =
+            super::validate_otol_response("Withania somnifera", response).expect("accepted");
+        assert_eq!(accepted.accepted_name, "Withania somnifera");
+        assert_eq!(accepted.ott_id, Some(512345));
+        assert_eq!(accepted.rank.as_deref(), Some("species"));
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn otol_validation_rejects_synonym_with_corrected_match() {
+        let response = serde_json::from_str::<super::OtolMatchNamesResponse>(
+            r#"{
+              "unmatched_names": [],
+              "results": [{
+                "name": "Old name",
+                "matches": [{
+                  "matched_name": "Old name",
+                  "score": 1.0,
+                  "is_approximate_match": false,
+                  "is_synonym": true,
+                  "taxon": {
+                    "ott_id": 42,
+                    "name": "Accepted name",
+                    "rank": "species",
+                    "is_suppressed": false
+                  }
+                }]
+              }]
+            }"#,
+        )
+        .expect("response");
+
+        let err = super::validate_otol_response("Old name", response).expect_err("rejected");
+        assert!(err.contains("Accepted name"));
+        assert!(err.contains("synonym true"));
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn otol_validation_rejects_approximate_match() {
+        let response = serde_json::from_str::<super::OtolMatchNamesResponse>(
+            r#"{
+              "unmatched_names": [],
+              "results": [{
+                "name": "Withania somnifer",
+                "matches": [{
+                  "matched_name": "Withania somnifera",
+                  "score": 0.98,
+                  "is_approximate_match": true,
+                  "is_synonym": false,
+                  "taxon": {
+                    "ott_id": 512345,
+                    "name": "Withania somnifera",
+                    "rank": "species",
+                    "is_suppressed": false
+                  }
+                }]
+              }]
+            }"#,
+        )
+        .expect("response");
+
+        let err =
+            super::validate_otol_response("Withania somnifer", response).expect_err("rejected");
+        assert!(err.contains("Withania somnifera"));
+        assert!(err.contains("approximate true"));
     }
 }

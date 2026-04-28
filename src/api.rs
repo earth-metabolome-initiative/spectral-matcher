@@ -16,6 +16,12 @@ pub struct ParseConfig {
     /// Exact MGF header name reused verbatim as the canonical exported spectrum identifier.
     #[serde(default = "default_identifier_header")]
     pub identifier: String,
+    /// Optional query-specific identifier header for search requests.
+    #[serde(default)]
+    pub query_identifier: Option<String>,
+    /// Optional library-specific identifier header for search requests.
+    #[serde(default)]
+    pub library_identifier: Option<String>,
     /// Minimum number of retained peaks required for a spectrum to be accepted.
     #[serde(default = "default_min_peaks")]
     pub min_peaks: usize,
@@ -28,9 +34,27 @@ impl Default for ParseConfig {
     fn default() -> Self {
         Self {
             identifier: default_identifier_header(),
+            query_identifier: None,
+            library_identifier: None,
             min_peaks: default_min_peaks(),
             max_peaks: default_max_peaks(),
         }
+    }
+}
+
+impl ParseConfig {
+    /// Returns the header used to identify query spectra in search requests.
+    pub fn query_identifier(&self) -> &str {
+        self.query_identifier
+            .as_deref()
+            .unwrap_or(self.identifier.as_str())
+    }
+
+    /// Returns the header used to identify library spectra in search requests.
+    pub fn library_identifier(&self) -> &str {
+        self.library_identifier
+            .as_deref()
+            .unwrap_or(self.identifier.as_str())
     }
 }
 
