@@ -172,12 +172,10 @@ fn merge_query_hits(
     let mut groups: HashMap<String, GroupAccumulator> = HashMap::new();
 
     for input in inputs {
-        for hit in input
-            .artifact
-            .result
-            .hits
-            .iter()
-            .filter(|hit| hit.query_index == query_index && hit.rank <= params.top_k_per_library)
+        for hit in
+            input.artifact.result.hits.iter().filter(|hit| {
+                hit.query_index == query_index && hit.rank <= params.top_k_per_library
+            })
         {
             let Some(library_meta) = input.artifact.library_spectra.get(hit.library_index) else {
                 continue;
@@ -376,7 +374,10 @@ fn consensus_annotation_order(
                 .representative_spectral_score
                 .total_cmp(&left.representative_spectral_score)
         })
-        .then_with(|| left.representative_input_name.cmp(&right.representative_input_name))
+        .then_with(|| {
+            left.representative_input_name
+                .cmp(&right.representative_input_name)
+        })
 }
 
 fn normalize_header_key(value: &str) -> String {
@@ -546,7 +547,10 @@ mod tests {
                 library_meta(0, "singleton", Some("BBBBBBBBBBBBBB-AAAA")),
                 library_meta(1, "consensus left", Some("AAAAAAAAAAAAAA-BBBB")),
             ],
-            vec![hit(0, 0, 1, 1.9, Some("BBBBBBBBBBBBBB")), hit(0, 1, 3, 1.7, Some("AAAAAAAAAAAAAA"))],
+            vec![
+                hit(0, 0, 1, 1.9, Some("BBBBBBBBBBBBBB")),
+                hit(0, 1, 3, 1.7, Some("AAAAAAAAAAAAAA")),
+            ],
         );
         let right = artifact(
             "isdb.mgf",
@@ -555,12 +559,25 @@ mod tests {
                 library_meta(0, "other singleton", Some("CCCCCCCCCCCCCC-DDDD")),
                 library_meta(1, "consensus right", Some("AAAAAAAAAAAAAA-CCCC")),
             ],
-            vec![hit(0, 0, 1, 1.8, Some("CCCCCCCCCCCCCC")), hit(0, 1, 2, 1.75, Some("AAAAAAAAAAAAAA"))],
+            vec![
+                hit(0, 0, 1, 1.8, Some("CCCCCCCCCCCCCC")),
+                hit(0, 1, 2, 1.75, Some("AAAAAAAAAAAAAA")),
+            ],
         );
 
-        let merged = merge_search_artifacts("gnps", left, "isdb", right, ConsensusMergeParams::default(), None)
-            .expect("merge");
-        let annotation = merged.result.queries[0].annotation.as_ref().expect("annotation");
+        let merged = merge_search_artifacts(
+            "gnps",
+            left,
+            "isdb",
+            right,
+            ConsensusMergeParams::default(),
+            None,
+        )
+        .expect("merge");
+        let annotation = merged.result.queries[0]
+            .annotation
+            .as_ref()
+            .expect("annotation");
         assert_eq!(annotation.consensus_key.as_deref(), Some("AAAAAAAAAAAAAA"));
         assert_eq!(annotation.support_count, 2);
         assert_eq!(annotation.support_libraries, vec!["gnps", "isdb"]);
@@ -576,18 +593,35 @@ mod tests {
                 library_meta(0, "singleton", Some("BBBBBBBBBBBBBB-AAAA")),
                 library_meta(1, "deep consensus", Some("AAAAAAAAAAAAAA-BBBB")),
             ],
-            vec![hit(0, 0, 1, 2.0, Some("BBBBBBBBBBBBBB")), hit(0, 1, 6, 1.6, Some("AAAAAAAAAAAAAA"))],
+            vec![
+                hit(0, 0, 1, 2.0, Some("BBBBBBBBBBBBBB")),
+                hit(0, 1, 6, 1.6, Some("AAAAAAAAAAAAAA")),
+            ],
         );
         let right = artifact(
             "isdb.mgf",
             queries.clone(),
-            vec![library_meta(0, "consensus right", Some("AAAAAAAAAAAAAA-CCCC"))],
+            vec![library_meta(
+                0,
+                "consensus right",
+                Some("AAAAAAAAAAAAAA-CCCC"),
+            )],
             vec![hit(0, 0, 2, 1.7, Some("AAAAAAAAAAAAAA"))],
         );
 
-        let merged = merge_search_artifacts("gnps", left, "isdb", right, ConsensusMergeParams::default(), None)
-            .expect("merge");
-        let annotation = merged.result.queries[0].annotation.as_ref().expect("annotation");
+        let merged = merge_search_artifacts(
+            "gnps",
+            left,
+            "isdb",
+            right,
+            ConsensusMergeParams::default(),
+            None,
+        )
+        .expect("merge");
+        let annotation = merged.result.queries[0]
+            .annotation
+            .as_ref()
+            .expect("annotation");
         assert_eq!(annotation.consensus_key.as_deref(), Some("BBBBBBBBBBBBBB"));
         assert_eq!(annotation.consensus_class, ConsensusClass::Singleton);
     }
@@ -603,9 +637,19 @@ mod tests {
         );
         let right = artifact("isdb.mgf", queries.clone(), Vec::new(), Vec::new());
 
-        let merged = merge_search_artifacts("gnps", left, "isdb", right, ConsensusMergeParams::default(), None)
-            .expect("merge");
-        let annotation = merged.result.queries[0].annotation.as_ref().expect("annotation");
+        let merged = merge_search_artifacts(
+            "gnps",
+            left,
+            "isdb",
+            right,
+            ConsensusMergeParams::default(),
+            None,
+        )
+        .expect("merge");
+        let annotation = merged.result.queries[0]
+            .annotation
+            .as_ref()
+            .expect("annotation");
         assert_eq!(annotation.support_count, 1);
         assert_eq!(annotation.support_libraries, vec!["gnps"]);
     }
@@ -620,18 +664,35 @@ mod tests {
                 library_meta(0, "consensus a", Some("AAAAAAAAAAAAAA-BBBB")),
                 library_meta(1, "consensus b", Some("AAAAAAAAAAAAAA-CCCC")),
             ],
-            vec![hit(0, 0, 2, 1.8, Some("AAAAAAAAAAAAAA")), hit(0, 1, 3, 1.7, Some("AAAAAAAAAAAAAA"))],
+            vec![
+                hit(0, 0, 2, 1.8, Some("AAAAAAAAAAAAAA")),
+                hit(0, 1, 3, 1.7, Some("AAAAAAAAAAAAAA")),
+            ],
         );
         let right = artifact(
             "isdb.mgf",
             queries.clone(),
-            vec![library_meta(0, "consensus right", Some("AAAAAAAAAAAAAA-DDDD"))],
+            vec![library_meta(
+                0,
+                "consensus right",
+                Some("AAAAAAAAAAAAAA-DDDD"),
+            )],
             vec![hit(0, 0, 1, 1.9, Some("AAAAAAAAAAAAAA"))],
         );
 
-        let merged = merge_search_artifacts("gnps", left, "isdb", right, ConsensusMergeParams::default(), None)
-            .expect("merge");
-        let annotation = merged.result.queries[0].annotation.as_ref().expect("annotation");
+        let merged = merge_search_artifacts(
+            "gnps",
+            left,
+            "isdb",
+            right,
+            ConsensusMergeParams::default(),
+            None,
+        )
+        .expect("merge");
+        let annotation = merged.result.queries[0]
+            .annotation
+            .as_ref()
+            .expect("annotation");
         assert_eq!(annotation.support_hit_count, 3);
         assert_eq!(annotation.support_hits.len(), 2);
         assert_eq!(annotation.best_rank_by_input["gnps"], 2);
@@ -653,10 +714,23 @@ mod tests {
             vec![hit(0, 0, 2, 1.7, Some("AAAAAAAAAAAAAA"))],
         );
 
-        let merged = merge_search_artifacts("gnps", left, "isdb", right, ConsensusMergeParams::default(), None)
-            .expect("merge");
-        let annotation = merged.result.queries[0].annotation.as_ref().expect("annotation");
-        assert_eq!(annotation.consensus_class, ConsensusClass::CrossLibraryShortInchikey);
+        let merged = merge_search_artifacts(
+            "gnps",
+            left,
+            "isdb",
+            right,
+            ConsensusMergeParams::default(),
+            None,
+        )
+        .expect("merge");
+        let annotation = merged.result.queries[0]
+            .annotation
+            .as_ref()
+            .expect("annotation");
+        assert_eq!(
+            annotation.consensus_class,
+            ConsensusClass::CrossLibraryShortInchikey
+        );
         assert!(!annotation.exact_structure_consensus);
     }
 
@@ -671,8 +745,15 @@ mod tests {
         );
         let right = artifact("isdb.mgf", queries.clone(), Vec::new(), Vec::new());
 
-        let merged = merge_search_artifacts("gnps", left, "isdb", right, ConsensusMergeParams::default(), None)
-            .expect("merge");
+        let merged = merge_search_artifacts(
+            "gnps",
+            left,
+            "isdb",
+            right,
+            ConsensusMergeParams::default(),
+            None,
+        )
+        .expect("merge");
         assert_eq!(merged.result.queries.len(), 2);
         assert_eq!(merged.result.queries[0].query_index, 0);
         assert_eq!(merged.result.queries[1].query_index, 1);

@@ -23,16 +23,14 @@ use serde::{Deserialize, Serialize};
 #[cfg(not(target_arch = "wasm32"))]
 use crate::api::JobProgressStage;
 use crate::api::{
-    NetworkArtifact, NetworkRequest, NetworkSpectrum, SearchArtifact, SearchArtifactHit,
-    SearchArtifactResult, SearchRequest,
+    MissingPrecursorMz, NetworkArtifact, NetworkRequest, NetworkSpectrum, ParseConfig,
+    SearchArtifact, SearchArtifactHit, SearchArtifactResult, SearchRequest,
 };
 use crate::export::{SearchQueryKey, export_search_tsv};
-use crate::mgf::load_mgf_bytes;
+use crate::mgf::load_mgf_bytes_with_policy;
 #[cfg(not(target_arch = "wasm32"))]
-use crate::mgf::{NativeLoadMessage, start_native_mgf_load};
-use crate::model::{
-    CandidateHit, LoadedSpectra, SearchResult, SpectrumRecord,
-};
+use crate::mgf::{NativeLoadMessage, start_native_mgf_load_with_policy};
+use crate::model::{CandidateHit, LoadedSpectra, SearchResult, SpectrumRecord};
 #[cfg(target_arch = "wasm32")]
 use crate::network::PairScore;
 #[cfg(target_arch = "wasm32")]
@@ -130,6 +128,7 @@ struct CachedMgf {
     identifier: String,
     min_peaks: usize,
     max_peaks: usize,
+    missing_precursor_policy: MissingPrecursorMz,
     loaded: LoadedSpectra,
 }
 
@@ -173,6 +172,13 @@ impl Ord for RankedNeighbor {
 fn mgf_cache() -> &'static Mutex<HashMap<PathBuf, CachedMgf>> {
     static CACHE: OnceLock<Mutex<HashMap<PathBuf, CachedMgf>>> = OnceLock::new();
     CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn network_missing_precursor_policy(parse: &ParseConfig) -> MissingPrecursorMz {
+    match parse.missing_precursor_mz {
+        MissingPrecursorMz::Reject => MissingPrecursorMz::UseZero,
+        policy => policy,
+    }
 }
 
 /// Returns the total number of query/library comparisons for a search job.
@@ -294,6 +300,7 @@ pub fn build_network_artifact(request: NetworkRequest) -> Result<NetworkArtifact
 
     #[cfg(target_arch = "wasm32")]
     {
+        let missing_precursor_policy = network_missing_precursor_policy(&request.parse);
         let loaded = load_request_spectra(
             &request.source_label,
             request.mgf_text.as_deref(),
@@ -301,13 +308,15 @@ pub fn build_network_artifact(request: NetworkRequest) -> Result<NetworkArtifact
             &request.parse.identifier,
             request.parse.min_peaks,
             request.parse.max_peaks,
+            missing_precursor_policy,
         )?;
         let spectra = preprocess_spectra_for_metric(loaded.spectra.clone(), request.build.compute)?;
         let scorer = MetricScorer::new(request.build.compute)?;
         #[cfg(not(target_arch = "wasm32"))]
         let pair_scores = score_all_pairs_parallel(&spectra, &scorer)?;
         #[cfg(target_arch = "wasm32")]
-        let pair_scores = score_all_pairs(&spectra, &scorer, request.build.min_matched_peaks.max(1))?;
+        let pair_scores =
+            score_all_pairs(&spectra, &scorer, request.build.min_matched_peaks.max(1))?;
         let metas = loaded
             .spectra
             .iter()
@@ -353,6 +362,7 @@ pub fn run_search_request(request: SearchRequest) -> Result<SearchArtifact, Stri
             request.parse.query_identifier(),
             request.parse.min_peaks,
             request.parse.max_peaks,
+            request.parse.missing_precursor_mz,
         )?;
         let library = load_request_spectra(
             &request.library_source_label,
@@ -361,6 +371,7 @@ pub fn run_search_request(request: SearchRequest) -> Result<SearchArtifact, Stri
             request.parse.library_identifier(),
             request.parse.min_peaks,
             request.parse.max_peaks,
+            request.parse.missing_precursor_mz,
         )?;
         let taxonomy = request
             .taxonomy
@@ -417,6 +428,7 @@ pub fn build_network_artifact_with_progress<F>(
 where
     F: Fn(JobProgressStage, u64, u64) + Send + Sync,
 {
+    let missing_precursor_policy = network_missing_precursor_policy(&request.parse);
     let loaded = load_request_spectra_with_progress(
         JobProgressStage::LoadingSpectra,
         &request.source_label,
@@ -425,6 +437,7 @@ where
         &request.parse.identifier,
         request.parse.min_peaks,
         request.parse.max_peaks,
+        missing_precursor_policy,
         &on_progress,
     )?;
 
@@ -493,6 +506,7 @@ where
         request.parse.query_identifier(),
         request.parse.min_peaks,
         request.parse.max_peaks,
+        request.parse.missing_precursor_mz,
         &on_progress,
     )?;
 
@@ -504,6 +518,7 @@ where
         request.parse.library_identifier(),
         request.parse.min_peaks,
         request.parse.max_peaks,
+        request.parse.missing_precursor_mz,
         &on_progress,
     )?;
 
@@ -598,14 +613,16 @@ fn load_request_spectra(
     identifier: &str,
     min_peaks: usize,
     max_peaks: usize,
+    missing_precursor_policy: MissingPrecursorMz,
 ) -> Result<LoadedSpectra, String> {
     if let Some(text) = mgf_text {
-        return load_mgf_bytes(
+        return load_mgf_bytes_with_policy(
             source_label,
             text.as_bytes(),
             identifier,
             min_peaks,
             max_peaks,
+            missing_precursor_policy,
         );
     }
 
@@ -628,6 +645,7 @@ fn load_request_spectra_with_progress<F>(
     identifier: &str,
     min_peaks: usize,
     max_peaks: usize,
+    missing_precursor_policy: MissingPrecursorMz,
     on_progress: &F,
 ) -> Result<LoadedSpectra, String>
 where
@@ -639,6 +657,7 @@ where
             identifier,
             min_peaks,
             max_peaks,
+            missing_precursor_policy,
             |completed, total| on_progress(stage, completed, total),
         );
     }
@@ -646,12 +665,13 @@ where
     if let Some(text) = mgf_text {
         let total = text.len() as u64;
         on_progress(stage, 0, total.max(1));
-        let loaded = load_mgf_bytes(
+        let loaded = load_mgf_bytes_with_policy(
             source_label,
             text.as_bytes(),
             identifier,
             min_peaks,
             max_peaks,
+            missing_precursor_policy,
         )?;
         on_progress(stage, total.max(1), total.max(1));
         return Ok(loaded);
@@ -667,6 +687,7 @@ fn load_mgf_path_cached_with_progress<F>(
     identifier: &str,
     min_peaks: usize,
     max_peaks: usize,
+    missing_precursor_policy: MissingPrecursorMz,
     mut on_progress: F,
 ) -> Result<LoadedSpectra, String>
 where
@@ -683,12 +704,19 @@ where
         && cached.identifier == identifier
         && cached.min_peaks == min_peaks
         && cached.max_peaks == max_peaks
+        && cached.missing_precursor_policy == missing_precursor_policy
     {
         on_progress(total, total);
         return Ok(cached.loaded.clone());
     }
 
-    let handle = start_native_mgf_load(&canonical, identifier, min_peaks, max_peaks)?;
+    let handle = start_native_mgf_load_with_policy(
+        &canonical,
+        identifier,
+        min_peaks,
+        max_peaks,
+        missing_precursor_policy,
+    )?;
     on_progress(0, total);
     loop {
         let processed = handle.processed_bytes().min(handle.total_bytes()).max(0);
@@ -705,6 +733,7 @@ where
                                 identifier: identifier.to_string(),
                                 min_peaks,
                                 max_peaks,
+                                missing_precursor_policy,
                                 loaded: loaded.clone(),
                             },
                         );
@@ -1484,6 +1513,7 @@ mod tests {
         SearchResult, finalize_search_candidates, run_search_request, search_library,
         start_native_search, total_search_pairs,
     };
+    use crate::api::MissingPrecursorMz;
     use crate::export::SearchQueryKey;
     use crate::model::{SpectrumMetadata, SpectrumRecord};
     use crate::similarity::SimilarityMetric;
@@ -1594,6 +1624,7 @@ mod tests {
                 library_identifier: None,
                 min_peaks: 1,
                 max_peaks: 1000,
+                missing_precursor_mz: MissingPrecursorMz::Reject,
             },
             search: LibrarySearchParams {
                 compute: base_compute_params(SimilarityMetric::LinearCosine),
@@ -1662,6 +1693,7 @@ mod tests {
                 library_identifier: None,
                 min_peaks: 1,
                 max_peaks: 1000,
+                missing_precursor_mz: MissingPrecursorMz::Reject,
             },
             search: LibrarySearchParams {
                 compute: base_compute_params(SimilarityMetric::LinearCosine),

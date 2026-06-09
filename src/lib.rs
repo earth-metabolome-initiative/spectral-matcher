@@ -24,16 +24,16 @@ pub use api::{
     ConsensusAnnotation, ConsensusArtifact, ConsensusArtifactResult, ConsensusClass,
     ConsensusInputSummary, ConsensusMergeParams, ConsensusQueryResult, ConsensusSupportHit,
     HealthResponse, JobCreatedResponse, JobProgress, JobProgressStage, JobStatus,
-    JobStatusResponse, MatcherJobResult, NetworkArtifact, NetworkBuildParams, NetworkRequest,
-    NetworkSpectrum, ParseConfig, SearchArtifact, SearchArtifactHit, SearchArtifactResult,
-    SearchRequest, SearchTaxonomyRequest,
+    JobStatusResponse, MatcherJobResult, MissingPrecursorMz, NetworkArtifact, NetworkBuildParams,
+    NetworkRequest, NetworkSpectrum, ParseConfig, SearchArtifact, SearchArtifactHit,
+    SearchArtifactResult, SearchRequest, SearchTaxonomyRequest,
 };
 /// Post-search consensus fusion across two library-search artifacts.
 pub use consensus::merge_search_artifacts;
-/// Curated downloadable spectral database metadata and helpers.
-pub use databases::{SpectralDatabase, resolve_spectral_database, spectral_databases};
 #[cfg(not(target_arch = "wasm32"))]
 pub use databases::download_spectral_database;
+/// Curated downloadable spectral database metadata and helpers.
+pub use databases::{SpectralDatabase, resolve_spectral_database, spectral_databases};
 #[cfg(target_arch = "wasm32")]
 pub use export::download_tsv_file;
 pub use export::{SearchQueryKey, export_consensus_tsv, export_search_json, export_search_tsv};
@@ -62,9 +62,9 @@ pub use search::{
 pub use search::{build_network_artifact_with_progress, run_search_request_with_progress};
 #[cfg(not(target_arch = "wasm32"))]
 pub use server::serve;
-#[cfg(not(target_arch = "wasm32"))]
-pub use taxonomy::{OtolAcceptedTaxon, OtolTaxonMatch, validate_otol_taxon_name};
 /// Similarity configuration and scorer construction helpers.
 pub use similarity::{
     ComputeParams, MetricScorer, SimilarityMetric, preprocess_spectra_for_metric,
 };
+#[cfg(not(target_arch = "wasm32"))]
+pub use taxonomy::{OtolAcceptedTaxon, OtolTaxonMatch, validate_otol_taxon_name};

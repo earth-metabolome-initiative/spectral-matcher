@@ -130,14 +130,12 @@ impl MetricScorer {
     /// Builds a configured scorer for the requested metric and weighting parameters.
     pub fn new(params: ComputeParams) -> Result<Self, String> {
         let inner = match params.metric {
-            SimilarityMetric::HungarianCosine => {
-                HungarianCosine::new(
-                    params.mz_power,
-                    params.intensity_power,
-                    params.fragment_mz_tolerance,
-                )
-                .map(MetricScorerInner::HungarianCosine)
-            }
+            SimilarityMetric::HungarianCosine => HungarianCosine::new(
+                params.mz_power,
+                params.intensity_power,
+                params.fragment_mz_tolerance,
+            )
+            .map(MetricScorerInner::HungarianCosine),
             SimilarityMetric::LinearCosine => LinearCosine::new(
                 params.mz_power,
                 params.intensity_power,

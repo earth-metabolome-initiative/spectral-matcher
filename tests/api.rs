@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 
 use spectral_matcher::{
     NetworkBuildParams, NetworkRequest, ParseConfig, SearchRequest, SimilarityMetric,
+    build_network_artifact, load_mgf_bytes, run_search_request,
 };
 
 /// Reserves an ephemeral localhost port for a test server instance.
@@ -102,6 +103,7 @@ fn health_and_sync_network_endpoints_work() {
             library_identifier: None,
             min_peaks: 1,
             max_peaks: 1000,
+            missing_precursor_mz: spectral_matcher::MissingPrecursorMz::Reject,
         },
         build: NetworkBuildParams {
             compute: spectral_matcher::ComputeParams {
@@ -121,6 +123,102 @@ fn health_and_sync_network_endpoints_work() {
     let artifact: spectral_matcher::NetworkArtifact =
         request_json(&url, "POST", "/v1/network", Some(&payload)).expect("network response");
     assert_eq!(artifact.network.nodes.len(), 2);
+}
+
+#[test]
+fn network_build_accepts_missing_precursor_mz_but_default_parsing_drops_it() {
+    let mgf = concat!(
+        "BEGIN IONS\nTITLE=centroid_a\n10 100\n20 80\n30 50\nEND IONS\n",
+        "BEGIN IONS\nTITLE=centroid_b\n10 100\n20 80\n30 50\nEND IONS\n",
+    );
+
+    let strict = load_mgf_bytes("centroids.mgf", mgf.as_bytes(), "TITLE", 1, 1000)
+        .expect("strict parser should report dropped spectra");
+    assert_eq!(strict.stats.ions_blocks, 2);
+    assert_eq!(strict.stats.accepted, 0);
+    assert_eq!(strict.stats.dropped_missing_precursor_mz, 2);
+
+    let artifact = build_network_artifact(NetworkRequest {
+        source_label: "centroids.mgf".to_string(),
+        mgf_text: Some(mgf.to_string()),
+        mgf_path: None,
+        parse: ParseConfig {
+            identifier: "TITLE".to_string(),
+            query_identifier: None,
+            library_identifier: None,
+            min_peaks: 1,
+            max_peaks: 1000,
+            missing_precursor_mz: spectral_matcher::MissingPrecursorMz::Reject,
+        },
+        build: NetworkBuildParams {
+            compute: spectral_matcher::ComputeParams {
+                metric: SimilarityMetric::LinearCosine,
+                fragment_mz_tolerance: 0.2,
+                mz_power: 0.0,
+                intensity_power: 1.0,
+                top_n_peaks: None,
+            },
+            threshold: 0.0,
+            min_matched_peaks: 1,
+            top_k: 5,
+        },
+    })
+    .expect("network build should accept centroid spectra without precursor m/z");
+
+    assert_eq!(artifact.parse_stats.ions_blocks, 2);
+    assert_eq!(artifact.parse_stats.accepted, 2);
+    assert_eq!(artifact.parse_stats.dropped_missing_precursor_mz, 0);
+    assert_eq!(artifact.spectra.len(), 2);
+    assert!(
+        artifact
+            .spectra
+            .iter()
+            .all(|spectrum| spectrum.meta.precursor_mz == 0.0)
+    );
+    assert_eq!(artifact.network.nodes.len(), 2);
+}
+
+#[test]
+fn search_can_infer_missing_precursor_mz_from_highest_fragment_mz() {
+    let artifact = run_search_request(SearchRequest {
+        query_source_label: "query.mgf".to_string(),
+        query_mgf_text: Some("BEGIN IONS\nTITLE=q\n10 100\n20 80\n30 50\nEND IONS\n".to_string()),
+        query_mgf_path: None,
+        library_source_label: "library.mgf".to_string(),
+        library_mgf_text: Some(
+            "BEGIN IONS\nNAME=l\nPEPMASS=30.0\n10 100\n20 80\n30 50\nEND IONS\n".to_string(),
+        ),
+        library_mgf_path: None,
+        parse: ParseConfig {
+            identifier: "TITLE".to_string(),
+            query_identifier: Some("TITLE".to_string()),
+            library_identifier: Some("NAME".to_string()),
+            min_peaks: 1,
+            max_peaks: 1000,
+            missing_precursor_mz: spectral_matcher::MissingPrecursorMz::HighestMz,
+        },
+        search: spectral_matcher::LibrarySearchParams {
+            compute: spectral_matcher::ComputeParams {
+                metric: SimilarityMetric::LinearCosine,
+                fragment_mz_tolerance: 0.2,
+                mz_power: 0.0,
+                intensity_power: 1.0,
+                top_n_peaks: None,
+            },
+            precursor_mz_tolerance: 0.0,
+            min_matched_peaks: 1,
+            min_similarity_threshold: 0.0,
+            top_n: 1,
+        },
+        taxonomy: None,
+        query_key: None,
+    })
+    .expect("search should infer missing query precursor m/z");
+
+    assert_eq!(artifact.query_stats.accepted, 1);
+    assert_eq!(artifact.query_stats.dropped_missing_precursor_mz, 0);
+    assert_eq!(artifact.query_spectra[0].precursor_mz, 30.0);
+    assert_eq!(artifact.result.hits.len(), 1);
 }
 
 /// Verifies the asynchronous library-search job lifecycle from creation to result fetch.
@@ -144,6 +242,7 @@ fn async_search_job_endpoints_work() {
             library_identifier: None,
             min_peaks: 1,
             max_peaks: 1000,
+            missing_precursor_mz: spectral_matcher::MissingPrecursorMz::Reject,
         },
         search: spectral_matcher::LibrarySearchParams {
             compute: spectral_matcher::ComputeParams {

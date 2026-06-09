@@ -101,10 +101,7 @@ pub fn export_search_tsv<TQ, TL>(
         "hit_raw_name".to_string(),
     ];
     if include_taxonomy {
-        header.splice(
-            3..3,
-            ["hit_rank_before_taxonomy".to_string()],
-        );
+        header.splice(3..3, ["hit_rank_before_taxonomy".to_string()]);
         header.splice(
             5..5,
             [
@@ -298,7 +295,10 @@ pub fn export_consensus_tsv(
             values[17] = format!("{:.6}", annotation.representative_precursor_mz);
             values[18] = format!("{:.4}", annotation.representative_ms1_deviation_ppm);
             values[19] = annotation.representative_raw_name.clone();
-            values[20] = annotation.representative_shared_rank.clone().unwrap_or_default();
+            values[20] = annotation
+                .representative_shared_rank
+                .clone()
+                .unwrap_or_default();
             values[21] = annotation
                 .representative_organism_name
                 .clone()

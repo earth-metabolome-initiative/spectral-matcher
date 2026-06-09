@@ -28,6 +28,9 @@ pub struct ParseConfig {
     /// Maximum number of retained peaks allowed for an accepted spectrum.
     #[serde(default = "default_max_peaks")]
     pub max_peaks: usize,
+    /// How to handle spectra without `PEPMASS` or `PRECURSOR_MZ`.
+    #[serde(default)]
+    pub missing_precursor_mz: MissingPrecursorMz,
 }
 
 impl Default for ParseConfig {
@@ -38,6 +41,7 @@ impl Default for ParseConfig {
             library_identifier: None,
             min_peaks: default_min_peaks(),
             max_peaks: default_max_peaks(),
+            missing_precursor_mz: MissingPrecursorMz::Reject,
         }
     }
 }
@@ -56,6 +60,19 @@ impl ParseConfig {
             .as_deref()
             .unwrap_or(self.identifier.as_str())
     }
+}
+
+/// Policy applied when an MGF spectrum has no explicit precursor m/z header.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MissingPrecursorMz {
+    /// Drop spectra without `PEPMASS` or `PRECURSOR_MZ`.
+    #[default]
+    Reject,
+    /// Accept the spectrum and serialize `precursor_mz` as `0.0`.
+    UseZero,
+    /// Accept the spectrum and use its highest fragment m/z as `precursor_mz`.
+    HighestMz,
 }
 
 /// Parameters that control spectral-network construction once spectra are loaded.

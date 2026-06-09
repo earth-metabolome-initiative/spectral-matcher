@@ -14,9 +14,8 @@ use mass_spectrometry::prelude::{GenericSpectrum, SpectrumAlloc, SpectrumMut};
 #[cfg(not(target_arch = "wasm32"))]
 use rayon::prelude::*;
 
-use crate::model::{
-    LoadedSpectra, ParseStats, SpectrumMetadata, SpectrumRecord,
-};
+use crate::api::MissingPrecursorMz;
+use crate::model::{LoadedSpectra, ParseStats, SpectrumMetadata, SpectrumRecord};
 
 #[derive(Clone, Debug)]
 struct ParsedSpectrum {
@@ -84,11 +83,34 @@ pub fn load_mgf_path(
     min_peaks: usize,
     max_peaks: usize,
 ) -> Result<LoadedSpectra, String> {
+    load_mgf_path_with_policy(
+        path,
+        identifier,
+        min_peaks,
+        max_peaks,
+        MissingPrecursorMz::Reject,
+    )
+}
+
+/// Loads and parses an MGF file from disk with explicit missing-precursor handling.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn load_mgf_path_with_policy(
+    path: &Path,
+    identifier: &str,
+    min_peaks: usize,
+    max_peaks: usize,
+    missing_precursor_policy: MissingPrecursorMz,
+) -> Result<LoadedSpectra, String> {
     use std::fs::File;
     use std::io::BufReader;
 
     let file = File::open(path).map_err(|err| format!("cannot open {}: {err}", path.display()))?;
-    let (parsed, stats) = parse_mgf_reader_local(BufReader::new(file), min_peaks, max_peaks)?;
+    let (parsed, stats) = parse_mgf_reader_local(
+        BufReader::new(file),
+        min_peaks,
+        max_peaks,
+        missing_precursor_policy,
+    )?;
     let spectra = to_records(parsed, identifier)?;
     ensure_unique_spectrum_ids(&spectra)?;
     Ok(LoadedSpectra {
@@ -105,6 +127,24 @@ pub fn start_native_mgf_load(
     identifier: &str,
     min_peaks: usize,
     max_peaks: usize,
+) -> Result<NativeLoadHandle, String> {
+    start_native_mgf_load_with_policy(
+        path,
+        identifier,
+        min_peaks,
+        max_peaks,
+        MissingPrecursorMz::Reject,
+    )
+}
+
+/// Starts a background MGF load with explicit missing-precursor handling.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn start_native_mgf_load_with_policy(
+    path: &Path,
+    identifier: &str,
+    min_peaks: usize,
+    max_peaks: usize,
+    missing_precursor_policy: MissingPrecursorMz,
 ) -> Result<NativeLoadHandle, String> {
     use std::fs::File;
     use std::io::BufReader;
@@ -130,6 +170,7 @@ pub fn start_native_mgf_load(
             reader,
             min_peaks,
             max_peaks,
+            missing_precursor_policy,
             |processed, stats| {
                 progress_bytes.store(processed.min(total_bytes), Ordering::Relaxed);
                 progress_accepted.store(stats.accepted, Ordering::Relaxed);
@@ -183,7 +224,31 @@ pub fn load_mgf_bytes(
     min_peaks: usize,
     max_peaks: usize,
 ) -> Result<LoadedSpectra, String> {
-    let (parsed, stats) = parse_mgf_reader_local(Cursor::new(bytes), min_peaks, max_peaks)?;
+    load_mgf_bytes_with_policy(
+        source_label,
+        bytes,
+        identifier,
+        min_peaks,
+        max_peaks,
+        MissingPrecursorMz::Reject,
+    )
+}
+
+/// Loads and parses MGF data from bytes with explicit missing-precursor handling.
+pub(crate) fn load_mgf_bytes_with_policy(
+    source_label: &str,
+    bytes: &[u8],
+    identifier: &str,
+    min_peaks: usize,
+    max_peaks: usize,
+    missing_precursor_policy: MissingPrecursorMz,
+) -> Result<LoadedSpectra, String> {
+    let (parsed, stats) = parse_mgf_reader_local(
+        Cursor::new(bytes),
+        min_peaks,
+        max_peaks,
+        missing_precursor_policy,
+    )?;
     let spectra = to_records(parsed, identifier)?;
     ensure_unique_spectrum_ids(&spectra)?;
     Ok(LoadedSpectra {
@@ -193,16 +258,17 @@ pub fn load_mgf_bytes(
     })
 }
 
-fn selected_spectrum_id(
-    spec: &ParsedSpectrum,
-    identifier: &str,
-) -> Result<String, String> {
-    let value = spec.headers.get(identifier).map(String::as_str).ok_or_else(|| {
-        format!(
-            "missing required spectrum identifier header {identifier} for spectrum '{}'",
-            spec.raw_name
-        )
-    })?;
+fn selected_spectrum_id(spec: &ParsedSpectrum, identifier: &str) -> Result<String, String> {
+    let value = spec
+        .headers
+        .get(identifier)
+        .map(String::as_str)
+        .ok_or_else(|| {
+            format!(
+                "missing required spectrum identifier header {identifier} for spectrum '{}'",
+                spec.raw_name
+            )
+        })?;
 
     if value.is_empty() {
         return Err(format!(
@@ -241,8 +307,15 @@ fn parse_mgf_reader_local<R: BufRead>(
     reader: R,
     min_peaks: usize,
     max_peaks: usize,
+    missing_precursor_policy: MissingPrecursorMz,
 ) -> Result<(Vec<ParsedSpectrum>, ParseStats), String> {
-    parse_mgf_reader_local_with_progress(reader, min_peaks, max_peaks, |_, _| {})
+    parse_mgf_reader_local_with_progress(
+        reader,
+        min_peaks,
+        max_peaks,
+        missing_precursor_policy,
+        |_, _| {},
+    )
 }
 
 /// Parses an MGF reader while reporting processed-byte progress.
@@ -250,6 +323,7 @@ fn parse_mgf_reader_local_with_progress<R: BufRead, F: FnMut(u64, ParseStats)>(
     mut reader: R,
     min_peaks: usize,
     max_peaks: usize,
+    missing_precursor_policy: MissingPrecursorMz,
     mut on_progress: F,
 ) -> Result<(Vec<ParsedSpectrum>, ParseStats), String> {
     let mut spectra = Vec::new();
@@ -304,7 +378,15 @@ fn parse_mgf_reader_local_with_progress<R: BufRead, F: FnMut(u64, ParseStats)>(
                 &source_scan_usi,
                 &scans,
             );
-            match (raw_name, precursor_mz.take()) {
+            let precursor_mz = match (precursor_mz.take(), missing_precursor_policy) {
+                (Some(pmz), _) => Some(pmz),
+                (None, MissingPrecursorMz::Reject) => None,
+                (None, MissingPrecursorMz::UseZero) => Some(0.0),
+                (None, MissingPrecursorMz::HighestMz) => {
+                    peaks.iter().map(|(mz, _)| *mz).max_by(f64::total_cmp)
+                }
+            };
+            match (raw_name, precursor_mz) {
                 (None, _) => {
                     stats.dropped_missing_name += 1;
                 }
@@ -442,7 +524,12 @@ fn parsed_spectrum_to_record(
     identifier: &str,
 ) -> Result<SpectrumRecord, String> {
     let spectrum_id = selected_spectrum_id(&spec, identifier)?;
-    let mut spectrum = GenericSpectrum::with_capacity(spec.precursor_mz, spec.peaks.len())
+    let spectrum_precursor_mz = if spec.precursor_mz > 0.0 {
+        spec.precursor_mz
+    } else {
+        1.0
+    };
+    let mut spectrum = GenericSpectrum::with_capacity(spectrum_precursor_mz, spec.peaks.len())
         .map_err(|err| format!("failed to create spectrum capacity: {err:?}"))?;
     for (mz, intensity) in &spec.peaks {
         spectrum
@@ -537,8 +624,7 @@ PEPMASS=123.45
 END IONS
 "#;
 
-        let loaded = load_mgf_bytes("test.mgf", input, "NAME", 2, 100)
-            .expect("mgf should parse");
+        let loaded = load_mgf_bytes("test.mgf", input, "NAME", 2, 100).expect("mgf should parse");
         let meta = &loaded.spectra[0].meta;
         assert_eq!(meta.headers.get("NAME"), Some(&"Example".to_string()));
         assert_eq!(meta.headers.get("ADDUCT"), Some(&"[M+H]+".to_string()));
@@ -562,8 +648,8 @@ PRECURSOR_MZ=321.0
 END IONS
 "#;
 
-        let loaded = load_mgf_bytes("test.mgf", input, "FEATURE_ID", 2, 100)
-            .expect("mgf should parse");
+        let loaded =
+            load_mgf_bytes("test.mgf", input, "FEATURE_ID", 2, 100).expect("mgf should parse");
         let meta = &loaded.spectra[0].meta;
         assert_eq!(meta.raw_name, "Title A");
         assert_eq!(meta.spectrum_id, "feat-1");
@@ -589,8 +675,7 @@ PEPMASS=101
 END IONS
 "#;
 
-        let err = match load_mgf_bytes("test.mgf", input, "FEATURE_ID", 1, 100)
-        {
+        let err = match load_mgf_bytes("test.mgf", input, "FEATURE_ID", 1, 100) {
             Ok(_) => panic!("duplicate ids should fail"),
             Err(err) => err,
         };

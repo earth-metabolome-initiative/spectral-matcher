@@ -145,8 +145,7 @@ mod tests {
     #[test]
     fn resolve_database_accepts_id_name_and_filename() {
         assert_eq!(
-            resolve_spectral_database("all_gnps_no_propogated")
-                .map(|database| database.filename),
+            resolve_spectral_database("all_gnps_no_propogated").map(|database| database.filename),
             Some("gnps_cleaned.mgf")
         );
         assert_eq!(
@@ -155,8 +154,7 @@ mod tests {
             Some("matchms.mgf")
         );
         assert_eq!(
-            resolve_spectral_database("isdb_lotus_pos_energySum.mgf")
-                .map(|database| database.id),
+            resolve_spectral_database("isdb_lotus_pos_energySum.mgf").map(|database| database.id),
             Some("isdb_lotus_pos_energysum")
         );
     }
