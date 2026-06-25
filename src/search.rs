@@ -37,7 +37,7 @@ use crate::network::PairScore;
 use crate::network::build_network;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::network::{SelectedNeighbor, build_network_from_selected_neighbors};
-use crate::similarity::{ComputeParams, MetricScorer, preprocess_spectra_for_metric};
+use crate::similarity::{ComputeParams, MetricIndex, MetricScorer, preprocess_spectra_for_metric};
 use crate::taxonomy::{LotusMetadataIndex, ResolvedLotusQuery, short_inchikey_from_record};
 
 /// Parameters controlling library-search filtering and final ranking.
@@ -253,23 +253,37 @@ pub fn search_library(
     let library_count = library.len();
     let queries = preprocess_spectra_for_metric(queries, params.compute)?;
     let library = preprocess_spectra_for_metric(library, params.compute)?;
-    let scorer = MetricScorer::new(params.compute)?;
     #[cfg(not(target_arch = "wasm32"))]
     {
         let total = total_search_pairs(query_count, library_count);
         let done = Arc::new(AtomicUsize::new(0));
         let cancel = Arc::new(AtomicBool::new(false));
-        let hits = score_query_library_pairs(
-            &queries,
-            &library,
-            &params,
-            &scorer,
-            total,
-            done,
-            cancel,
-            &|_, _, _| {},
-            &|| false,
-        )?
+        let hits = if let Some(index) = MetricIndex::new(params.compute, &library).transpose()? {
+            score_query_library_pairs_indexed(
+                &queries,
+                &library,
+                &params,
+                &index,
+                total,
+                done,
+                cancel,
+                &|_, _, _| {},
+                &|| false,
+            )?
+        } else {
+            let scorer = MetricScorer::new(params.compute)?;
+            score_query_library_pairs(
+                &queries,
+                &library,
+                &params,
+                &scorer,
+                total,
+                done,
+                cancel,
+                &|_, _, _| {},
+                &|| false,
+            )?
+        }
         .ok_or_else(|| "search was unexpectedly cancelled".to_string())?;
         Ok(SearchResult {
             hits,
@@ -281,6 +295,7 @@ pub fn search_library(
 
     #[cfg(target_arch = "wasm32")]
     {
+        let scorer = MetricScorer::new(params.compute)?;
         let candidates = search_candidates(&queries, &library, &params, &scorer)?;
         Ok(SearchResult {
             hits: finalize_search_candidates(candidates, params.top_n),
@@ -442,21 +457,36 @@ where
     )?;
 
     let spectra = preprocess_spectra_for_metric(loaded.spectra.clone(), request.build.compute)?;
-    let scorer = MetricScorer::new(request.build.compute)?;
     let total = total_network_pairs(spectra.len()) as u64;
     let done = Arc::new(AtomicUsize::new(0));
     on_progress(JobProgressStage::Scoring, 0, total);
-    let selected_neighbors = score_network_neighbors_parallel(
-        &spectra,
-        &scorer,
-        request.build.threshold.clamp(0.0, 1.0),
-        request.build.min_matched_peaks.max(1),
-        request.build.top_k.max(1),
-        total as usize,
-        Arc::clone(&done),
-        &on_progress,
-        &is_cancelled,
-    )?;
+    let selected_neighbors =
+        if let Some(index) = MetricIndex::new(request.build.compute, &spectra).transpose()? {
+            score_network_neighbors_indexed_parallel(
+                &spectra,
+                &index,
+                request.build.threshold.clamp(0.0, 1.0),
+                request.build.min_matched_peaks.max(1),
+                request.build.top_k.max(1),
+                total as usize,
+                Arc::clone(&done),
+                &on_progress,
+                &is_cancelled,
+            )?
+        } else {
+            let scorer = MetricScorer::new(request.build.compute)?;
+            score_network_neighbors_parallel(
+                &spectra,
+                &scorer,
+                request.build.threshold.clamp(0.0, 1.0),
+                request.build.min_matched_peaks.max(1),
+                request.build.top_k.max(1),
+                total as usize,
+                Arc::clone(&done),
+                &on_progress,
+                &is_cancelled,
+            )?
+        };
     on_progress(
         JobProgressStage::Scoring,
         done.load(Ordering::Relaxed) as u64,
@@ -536,22 +566,38 @@ where
     };
     let search_params =
         effective_search_params(&request.search, library_processed.len(), taxonomy.is_some());
-    let scorer = MetricScorer::new(search_params.compute)?;
     let total = total_search_pairs(queries_processed.len(), library_processed.len());
     let done = Arc::new(AtomicUsize::new(0));
     let cancel = Arc::new(AtomicBool::new(false));
     on_progress(JobProgressStage::Scoring, 0, total as u64);
-    let hits = score_query_library_pairs(
-        &queries_processed,
-        &library_processed,
-        &search_params,
-        &scorer,
-        total,
-        Arc::clone(&done),
-        cancel,
-        &on_progress,
-        &is_cancelled,
-    )?
+    let hits = if let Some(index) =
+        MetricIndex::new(search_params.compute, &library_processed).transpose()?
+    {
+        score_query_library_pairs_indexed(
+            &queries_processed,
+            &library_processed,
+            &search_params,
+            &index,
+            total,
+            Arc::clone(&done),
+            cancel,
+            &on_progress,
+            &is_cancelled,
+        )?
+    } else {
+        let scorer = MetricScorer::new(search_params.compute)?;
+        score_query_library_pairs(
+            &queries_processed,
+            &library_processed,
+            &search_params,
+            &scorer,
+            total,
+            Arc::clone(&done),
+            cancel,
+            &on_progress,
+            &is_cancelled,
+        )?
+    }
     .ok_or_else(|| "search was unexpectedly cancelled".to_string())?;
     on_progress(
         JobProgressStage::Scoring,
@@ -798,26 +844,48 @@ pub fn start_native_search(
                     return;
                 }
             };
-            let scorer = match MetricScorer::new(params.compute) {
-                Ok(sim) => sim,
-                Err(err) => {
+            let total = total_search_pairs(query_count, library_count);
+            let hits = if let Some(index) = match MetricIndex::new(params.compute, &library) {
+                Some(Ok(index)) => Some(index),
+                Some(Err(err)) => {
                     let _ = tx.send(SearchMessage::Failed(err));
                     return;
                 }
+                None => None,
+            } {
+                score_query_library_pairs_indexed(
+                    &queries,
+                    &library,
+                    &params,
+                    &index,
+                    total,
+                    done_for_thread,
+                    cancel_for_thread,
+                    &|_, _, _| {},
+                    &|| false,
+                )
+            } else {
+                let scorer = match MetricScorer::new(params.compute) {
+                    Ok(sim) => sim,
+                    Err(err) => {
+                        let _ = tx.send(SearchMessage::Failed(err));
+                        return;
+                    }
+                };
+                score_query_library_pairs(
+                    &queries,
+                    &library,
+                    &params,
+                    &scorer,
+                    total,
+                    done_for_thread,
+                    cancel_for_thread,
+                    &|_, _, _| {},
+                    &|| false,
+                )
             };
 
-            let total = total_search_pairs(query_count, library_count);
-            let result = match score_query_library_pairs(
-                &queries,
-                &library,
-                &params,
-                &scorer,
-                total,
-                done_for_thread,
-                cancel_for_thread,
-                &|_, _, _| {},
-                &|| false,
-            ) {
+            let result = match hits {
                 Ok(Some(hits)) => SearchResult {
                     hits,
                     query_count,
@@ -1100,6 +1168,97 @@ fn score_query_library_pairs(
     Ok(Some(finalize_search_candidates(candidates, params.top_n)))
 }
 
+/// Scores query/library matches with a reusable inverted spectral index.
+#[cfg(not(target_arch = "wasm32"))]
+fn score_query_library_pairs_indexed(
+    queries: &[SpectrumRecord],
+    library: &[SpectrumRecord],
+    params: &LibrarySearchParams,
+    index: &MetricIndex,
+    total: usize,
+    done_worker: Arc<AtomicUsize>,
+    cancel_worker: Arc<AtomicBool>,
+    on_progress: &(impl Fn(JobProgressStage, u64, u64) + Sync),
+    is_cancelled: &(impl Fn() -> bool + Sync),
+) -> Result<Option<Vec<CandidateHit>>, String> {
+    let error = Arc::new(Mutex::new(None::<String>));
+    let error_worker = Arc::clone(&error);
+    let done_for_iter = Arc::clone(&done_worker);
+    let cancel_for_iter = Arc::clone(&cancel_worker);
+    let report_every = progress_report_every(total);
+
+    let candidates: Vec<SearchCandidate> = queries
+        .par_iter()
+        .enumerate()
+        .flat_map_iter(|(query_idx, query)| {
+            if cancel_for_iter.load(Ordering::Relaxed) || is_cancelled() {
+                cancel_for_iter.store(true, Ordering::Relaxed);
+                return Vec::new();
+            }
+
+            let mut state = index.new_search_state();
+            let results = match index.search_with_state(query, &mut state, query_idx) {
+                Ok(results) => results,
+                Err(err) => {
+                    if let Ok(mut slot) = error_worker.lock()
+                        && slot.is_none()
+                    {
+                        *slot = Some(err);
+                    }
+                    cancel_for_iter.store(true, Ordering::Relaxed);
+                    return Vec::new();
+                }
+            };
+
+            let completed =
+                done_for_iter.fetch_add(library.len(), Ordering::Relaxed) + library.len();
+            if completed % report_every == 0 || completed >= total {
+                on_progress(
+                    JobProgressStage::Scoring,
+                    completed.min(total) as u64,
+                    total as u64,
+                );
+            }
+
+            results
+                .into_iter()
+                .filter_map(|hit| {
+                    let library_idx = hit.library_index;
+                    if library_idx >= library.len() {
+                        return None;
+                    }
+                    if !search_precursor_mz_passes(query, &library[library_idx], params) {
+                        return None;
+                    }
+                    search_match_passes(hit.score, hit.matches, params).then_some(SearchCandidate {
+                        query_index: query_idx,
+                        library_index: library_idx,
+                        rank_before_taxonomy: 0,
+                        spectral_score: hit.score,
+                        taxonomic_score: 0.0,
+                        combined_score: hit.score,
+                        matches: hit.matches,
+                        matched_organism_name: None,
+                        matched_organism_wikidata: None,
+                        matched_shared_rank: None,
+                        matched_short_inchikey: None,
+                    })
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect();
+
+    if let Ok(mut slot) = error.lock()
+        && let Some(err) = slot.take()
+    {
+        return Err(err);
+    }
+    if cancel_worker.load(Ordering::Relaxed) {
+        return Ok(None);
+    }
+    Ok(Some(finalize_search_candidates(candidates, params.top_n)))
+}
+
 /// Scores all unique spectrum pairs serially.
 #[cfg(target_arch = "wasm32")]
 fn score_all_pairs(
@@ -1205,6 +1364,106 @@ fn score_network_neighbors_parallel(
                         *slot = Some(err);
                     }
                 }
+            }
+        }
+
+        if let Ok(mut heap) = neighbors[left_index].lock() {
+            for ranked in local_heap.into_iter().map(|entry| entry.0) {
+                push_ranked_neighbor(&mut heap, ranked, top_k);
+            }
+        }
+    });
+
+    if let Ok(mut slot) = error.lock()
+        && let Some(err) = slot.take()
+    {
+        return Err(err);
+    }
+
+    Ok(neighbors
+        .into_iter()
+        .map(|heap| ranked_heap_to_selected_neighbors(heap, top_k))
+        .collect())
+}
+
+/// Scores network neighbors with a reusable inverted spectral index.
+#[cfg(not(target_arch = "wasm32"))]
+fn score_network_neighbors_indexed_parallel(
+    spectra: &[SpectrumRecord],
+    index: &MetricIndex,
+    threshold: f64,
+    min_matched_peaks: usize,
+    top_k: usize,
+    total: usize,
+    done_worker: Arc<AtomicUsize>,
+    on_progress: &(impl Fn(JobProgressStage, u64, u64) + Sync),
+    is_cancelled: &(impl Fn() -> bool + Sync),
+) -> Result<Vec<Vec<SelectedNeighbor>>, String> {
+    let threshold = threshold.clamp(0.0, 1.0);
+    let top_k = top_k.max(1);
+    let report_every = progress_report_every(total);
+    let neighbors: Vec<Mutex<BinaryHeap<Reverse<RankedNeighbor>>>> = (0..spectra.len())
+        .map(|_| Mutex::new(BinaryHeap::new()))
+        .collect();
+    let error = Arc::new(Mutex::new(None::<String>));
+    let error_worker = Arc::clone(&error);
+
+    (0..spectra.len()).into_par_iter().for_each(|left_index| {
+        if is_cancelled() {
+            if let Ok(mut slot) = error_worker.lock()
+                && slot.is_none()
+            {
+                *slot = Some("job cancelled".to_string());
+            }
+            return;
+        }
+
+        let mut state = index.new_search_state();
+        let results = match index.search_with_state(&spectra[left_index], &mut state, left_index) {
+            Ok(results) => results,
+            Err(err) => {
+                if let Ok(mut slot) = error_worker.lock()
+                    && slot.is_none()
+                {
+                    *slot = Some(err);
+                }
+                return;
+            }
+        };
+
+        let row_pairs = spectra.len().saturating_sub(left_index + 1);
+        let completed = done_worker.fetch_add(row_pairs, Ordering::Relaxed) + row_pairs;
+        if completed % report_every == 0 || completed >= total {
+            on_progress(
+                JobProgressStage::Scoring,
+                completed.min(total) as u64,
+                total as u64,
+            );
+        }
+
+        let mut local_heap: BinaryHeap<Reverse<RankedNeighbor>> = BinaryHeap::new();
+        for hit in results {
+            let right_index = hit.library_index;
+            if right_index <= left_index || right_index >= spectra.len() {
+                continue;
+            }
+            if hit.score < threshold || hit.matches < min_matched_peaks {
+                continue;
+            }
+
+            let left_candidate = RankedNeighbor {
+                neighbor: right_index,
+                score: hit.score,
+                matches: hit.matches,
+            };
+            let right_candidate = RankedNeighbor {
+                neighbor: left_index,
+                score: hit.score,
+                matches: hit.matches,
+            };
+            push_ranked_neighbor(&mut local_heap, left_candidate, top_k);
+            if let Ok(mut heap) = neighbors[right_index].lock() {
+                push_ranked_neighbor(&mut heap, right_candidate, top_k);
             }
         }
 
@@ -1505,6 +1764,8 @@ fn search_candidate_order(left: &SearchCandidate, right: &SearchCandidate) -> st
 mod tests {
     use std::collections::BTreeMap;
     use std::sync::Arc;
+    #[cfg(not(target_arch = "wasm32"))]
+    use std::sync::atomic::AtomicUsize;
 
     use mass_spectrometry::prelude::{GenericSpectrum, SpectrumAlloc, SpectrumMut};
 
@@ -1516,7 +1777,7 @@ mod tests {
     use crate::api::MissingPrecursorMz;
     use crate::export::SearchQueryKey;
     use crate::model::{SpectrumMetadata, SpectrumRecord};
-    use crate::similarity::SimilarityMetric;
+    use crate::similarity::{MetricIndex, MetricScorer, SimilarityMetric};
 
     fn spectrum(id: usize, precursor: f64, peaks: &[(f64, f64)]) -> SpectrumRecord {
         let mut spec = GenericSpectrum::with_capacity(precursor, peaks.len())
@@ -1858,5 +2119,64 @@ mod tests {
         };
 
         assert_eq!(native, incremental);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn indexed_network_neighbors_match_scalar_linear_cosine() {
+        let spectra = vec![
+            spectrum(0, 100.0, &[(10.0, 1.0), (20.0, 0.8), (30.0, 0.5)]),
+            spectrum(1, 100.0, &[(10.0, 1.0), (20.0, 0.8), (30.0, 0.5)]),
+            spectrum(2, 100.0, &[(10.0, 1.0), (20.0, 0.5), (40.0, 0.2)]),
+        ];
+        let compute = base_compute_params(SimilarityMetric::LinearCosine);
+        let scorer = MetricScorer::new(compute).expect("scalar scorer");
+        let index = MetricIndex::new(compute, &spectra)
+            .expect("linear cosine should support index")
+            .expect("index build");
+        let total = super::total_network_pairs(spectra.len());
+
+        let scalar = super::score_network_neighbors_parallel(
+            &spectra,
+            &scorer,
+            0.1,
+            2,
+            2,
+            total,
+            Arc::new(AtomicUsize::new(0)),
+            &|_, _, _| {},
+            &|| false,
+        )
+        .expect("scalar network scoring");
+        let indexed = super::score_network_neighbors_indexed_parallel(
+            &spectra,
+            &index,
+            0.1,
+            2,
+            2,
+            total,
+            Arc::new(AtomicUsize::new(0)),
+            &|_, _, _| {},
+            &|| false,
+        )
+        .expect("indexed network scoring");
+
+        assert_selected_neighbors_eq(&indexed, &scalar);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn assert_selected_neighbors_eq(
+        left: &[Vec<crate::network::SelectedNeighbor>],
+        right: &[Vec<crate::network::SelectedNeighbor>],
+    ) {
+        assert_eq!(left.len(), right.len());
+        for (left_neighbors, right_neighbors) in left.iter().zip(right) {
+            assert_eq!(left_neighbors.len(), right_neighbors.len());
+            for (left, right) in left_neighbors.iter().zip(right_neighbors) {
+                assert_eq!(left.neighbor, right.neighbor);
+                assert_eq!(left.matches, right.matches);
+                assert!((left.score - right.score).abs() < 1e-10);
+            }
+        }
     }
 }

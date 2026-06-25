@@ -12,19 +12,19 @@ identifier = "FEATURE_ID"
 
 [jobs.build.compute]
 # Spectral similarity metric used to score spectrum pairs.
-metric = "HungarianCosine"
+metric = "ModifiedLinearCosine"
 # Fragment m/z tolerance in Dalton used during peak matching.
 fragment_mz_tolerance = 0.05
 # Exponent applied to fragment m/z while weighting peaks.
-mz_power = 0.5
+mz_power = 0
 # Exponent applied to fragment intensity while weighting peaks.
-intensity_power = 0.5
+intensity_power = 1
 # Number of most intense peaks retained per spectrum for scoring.
-top_n_peaks = 100
+top_n_peaks = 50
 
 [jobs.build]
 # Minimum similarity score required to keep an edge.
-threshold = 0.6
+threshold = 0.8
 # Minimum number of matched fragment peaks required to keep an edge.
 min_matched_peaks = 6
 # Maximum number of retained neighbors per node.

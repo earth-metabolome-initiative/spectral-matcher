@@ -3,10 +3,11 @@
 use std::sync::Arc;
 
 use mass_spectrometry::prelude::{
-    GenericSpectrum, HungarianCosine, LinearCosine, LinearEntropy, ModifiedHungarianCosine,
-    ModifiedLinearCosine, ModifiedLinearEntropy, MsEntropyCleanSpectrum, ScalarSimilarity,
-    SimilarityComputationError, SiriusMergeClosePeaks, SpectralProcessor, SpectrumAlloc,
-    SpectrumMut,
+    FlashCosineIndex, FlashEntropyIndex, FlashSearchResult, GenericSpectrum, HungarianCosine,
+    LinearCosine, LinearEntropy, ModifiedHungarianCosine, ModifiedLinearCosine,
+    ModifiedLinearEntropy, MsEntropyCleanSpectrum, ScalarSimilarity, SearchState,
+    SimilarityComputationError, SiriusMergeClosePeaks, SpectraIndexBuilder, SpectralProcessor,
+    SpectrumAlloc, SpectrumMut,
 };
 use serde::{Deserialize, Serialize};
 
@@ -60,13 +61,13 @@ impl SimilarityMetric {
                 "Exact cosine matching with Hungarian assignment; slower, more exhaustive."
             }
             Self::LinearCosine => {
-                "Linear-time cosine; requires well-separated peaks and returns an error otherwise."
+                "Linear-time cosine after close-peak merging; compatible with Flash indexing."
             }
             Self::ModifiedHungarianCosine => {
                 "Precursor-shift-aware cosine using Hungarian assignment for analog-style matching."
             }
             Self::ModifiedLinearCosine => {
-                "Linear-time precursor-shift-aware cosine; requires well-separated peaks."
+                "Linear-time precursor-shift-aware cosine after close-peak merging; compatible with Flash indexing."
             }
             Self::LinearEntropyWeighted => {
                 "Spectral entropy similarity with intensity weighting after entropy preprocessing."
@@ -88,6 +89,19 @@ impl SimilarityMetric {
         matches!(
             self,
             Self::LinearEntropyWeighted
+                | Self::LinearEntropyUnweighted
+                | Self::ModifiedLinearEntropyWeighted
+                | Self::ModifiedLinearEntropyUnweighted
+        )
+    }
+
+    /// Returns whether the metric needs close-peak merging for linear matching/indexing.
+    fn needs_close_peak_merging(self) -> bool {
+        matches!(
+            self,
+            Self::LinearCosine
+                | Self::ModifiedLinearCosine
+                | Self::LinearEntropyWeighted
                 | Self::LinearEntropyUnweighted
                 | Self::ModifiedLinearEntropyWeighted
                 | Self::ModifiedLinearEntropyUnweighted
@@ -124,6 +138,172 @@ enum MetricScorerInner {
 pub struct MetricScorer {
     metric: SimilarityMetric,
     inner: MetricScorerInner,
+}
+
+enum MetricIndexInner {
+    Cosine(FlashCosineIndex<f64>),
+    ModifiedCosine(FlashCosineIndex<f64>),
+    Entropy(FlashEntropyIndex<f64>),
+    ModifiedEntropy(FlashEntropyIndex<f64>),
+}
+
+pub enum MetricIndexSearchState {
+    Cosine(SearchState),
+    Entropy(SearchState),
+}
+
+/// Similarity result returned by an indexed library-scale search.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct IndexedSimilarity {
+    /// Zero-based index of the matched spectrum in the indexed library.
+    pub library_index: usize,
+    /// Similarity score in the same range as scalar metric scoring.
+    pub score: f64,
+    /// Number of matched fragment peaks.
+    pub matches: usize,
+}
+
+/// Library-scale inverted index for metrics supported by mass-spectrometry-traits.
+pub struct MetricIndex {
+    metric: SimilarityMetric,
+    inner: MetricIndexInner,
+}
+
+impl MetricIndex {
+    /// Builds an index for metrics with a compatible flash backend.
+    pub fn new(params: ComputeParams, library: &[SpectrumRecord]) -> Option<Result<Self, String>> {
+        let spectra = library
+            .iter()
+            .map(|record| record.spectrum.as_ref().clone())
+            .collect::<Vec<_>>();
+        let build = match params.metric {
+            SimilarityMetric::LinearCosine => FlashCosineIndex::<f64>::builder()
+                .mz_power(params.mz_power)
+                .intensity_power(params.intensity_power)
+                .mz_tolerance(params.fragment_mz_tolerance)
+                .build(&spectra)
+                .map(MetricIndexInner::Cosine)
+                .map_err(|err| format!("failed to build LinearCosine flash index: {err:?}")),
+            SimilarityMetric::ModifiedLinearCosine => FlashCosineIndex::<f64>::builder()
+                .mz_power(params.mz_power)
+                .intensity_power(params.intensity_power)
+                .mz_tolerance(params.fragment_mz_tolerance)
+                .build(&spectra)
+                .map(MetricIndexInner::ModifiedCosine)
+                .map_err(|err| {
+                    format!("failed to build ModifiedLinearCosine flash index: {err:?}")
+                }),
+            SimilarityMetric::LinearEntropyWeighted => FlashEntropyIndex::<f64>::builder()
+                .mz_power(params.mz_power)
+                .intensity_power(params.intensity_power)
+                .mz_tolerance(params.fragment_mz_tolerance)
+                .weighted(true)
+                .build(&spectra)
+                .map(MetricIndexInner::Entropy)
+                .map_err(|err| {
+                    format!("failed to build LinearEntropyWeighted flash index: {err:?}")
+                }),
+            SimilarityMetric::LinearEntropyUnweighted => FlashEntropyIndex::<f64>::builder()
+                .mz_power(params.mz_power)
+                .intensity_power(params.intensity_power)
+                .mz_tolerance(params.fragment_mz_tolerance)
+                .weighted(false)
+                .build(&spectra)
+                .map(MetricIndexInner::Entropy)
+                .map_err(|err| {
+                    format!("failed to build LinearEntropyUnweighted flash index: {err:?}")
+                }),
+            SimilarityMetric::ModifiedLinearEntropyWeighted => FlashEntropyIndex::<f64>::builder()
+                .mz_power(params.mz_power)
+                .intensity_power(params.intensity_power)
+                .mz_tolerance(params.fragment_mz_tolerance)
+                .weighted(true)
+                .build(&spectra)
+                .map(MetricIndexInner::ModifiedEntropy)
+                .map_err(|err| {
+                    format!("failed to build ModifiedLinearEntropyWeighted flash index: {err:?}")
+                }),
+            SimilarityMetric::ModifiedLinearEntropyUnweighted => {
+                FlashEntropyIndex::<f64>::builder()
+                    .mz_power(params.mz_power)
+                    .intensity_power(params.intensity_power)
+                    .mz_tolerance(params.fragment_mz_tolerance)
+                    .weighted(false)
+                    .build(&spectra)
+                    .map(MetricIndexInner::ModifiedEntropy)
+                    .map_err(|err| {
+                        format!(
+                            "failed to build ModifiedLinearEntropyUnweighted flash index: {err:?}"
+                        )
+                    })
+            }
+            SimilarityMetric::HungarianCosine | SimilarityMetric::ModifiedHungarianCosine => {
+                return None;
+            }
+        };
+
+        Some(build.map(|inner| Self {
+            metric: params.metric,
+            inner,
+        }))
+    }
+
+    /// Creates reusable per-query scratch storage for this index.
+    pub fn new_search_state(&self) -> MetricIndexSearchState {
+        match &self.inner {
+            MetricIndexInner::Cosine(index) | MetricIndexInner::ModifiedCosine(index) => {
+                MetricIndexSearchState::Cosine(index.new_search_state())
+            }
+            MetricIndexInner::Entropy(index) | MetricIndexInner::ModifiedEntropy(index) => {
+                MetricIndexSearchState::Entropy(index.new_search_state())
+            }
+        }
+    }
+
+    /// Searches the indexed library for spectra that share at least one peak.
+    pub fn search_with_state(
+        &self,
+        query: &SpectrumRecord,
+        state: &mut MetricIndexSearchState,
+        query_idx: usize,
+    ) -> Result<Vec<IndexedSimilarity>, String> {
+        let result = match (&self.inner, state) {
+            (MetricIndexInner::Cosine(index), MetricIndexSearchState::Cosine(state)) => index
+                .search_with_state(query.spectrum.as_ref(), state)
+                .map_err(|err| self.format_index_error(err, query_idx))?,
+            (MetricIndexInner::ModifiedCosine(index), MetricIndexSearchState::Cosine(state)) => {
+                index
+                    .search_modified_with_state(query.spectrum.as_ref(), state)
+                    .map_err(|err| self.format_index_error(err, query_idx))?
+            }
+            (MetricIndexInner::Entropy(index), MetricIndexSearchState::Entropy(state)) => index
+                .search_with_state(query.spectrum.as_ref(), state)
+                .map_err(|err| self.format_index_error(err, query_idx))?,
+            (MetricIndexInner::ModifiedEntropy(index), MetricIndexSearchState::Entropy(state)) => {
+                index
+                    .search_modified_with_state(query.spectrum.as_ref(), state)
+                    .map_err(|err| self.format_index_error(err, query_idx))?
+            }
+            _ => return Err("flash index search state does not match metric".to_string()),
+        };
+
+        Ok(result.into_iter().map(indexed_similarity).collect())
+    }
+
+    fn format_index_error(&self, err: SimilarityComputationError, query_idx: usize) -> String {
+        format!(
+            "{} flash index search failed for query {query_idx}: {err:?}",
+            self.metric.label()
+        )
+    }
+}
+
+fn indexed_similarity(result: FlashSearchResult) -> IndexedSimilarity {
+    IndexedSimilarity {
+        library_index: result.spectrum_id as usize,
+        score: result.score,
+        matches: result.n_matches,
+    }
 }
 
 impl MetricScorer {
@@ -240,24 +420,33 @@ pub fn preprocess_spectra_for_metric<T>(
     spectra: Vec<SpectrumRecord<T>>,
     params: ComputeParams,
 ) -> Result<Vec<SpectrumRecord<T>>, String> {
-    let spectra = apply_top_n_peak_filter(spectra, params.top_n_peaks)?;
+    let mut spectra = apply_top_n_peak_filter(spectra, params.top_n_peaks)?;
 
-    if !params.metric.needs_linear_entropy_preprocessing() {
+    if params.metric.needs_linear_entropy_preprocessing() {
+        let cleaner = MsEntropyCleanSpectrum::builder()
+            .build()
+            .map_err(|err| format!("failed to configure ms_entropy cleaner: {err:?}"))?;
+
+        spectra = spectra
+            .into_iter()
+            .map(|mut record| {
+                record.spectrum = Arc::new(cleaner.process(record.spectrum.as_ref()));
+                record
+            })
+            .collect();
+    }
+
+    if !params.metric.needs_close_peak_merging() {
         return Ok(spectra);
     }
 
-    let cleaner = MsEntropyCleanSpectrum::builder()
-        .build()
-        .map_err(|err| format!("failed to configure ms_entropy cleaner: {err:?}"))?;
     let merger = SiriusMergeClosePeaks::new(params.fragment_mz_tolerance)
         .map_err(|err| format!("failed to configure close-peak merger: {err:?}"))?;
 
     Ok(spectra
         .into_iter()
         .map(|mut record| {
-            let cleaned = cleaner.process(record.spectrum.as_ref());
-            let merged = merger.process(&cleaned);
-            record.spectrum = Arc::new(merged);
+            record.spectrum = Arc::new(merger.process(record.spectrum.as_ref()));
             record
         })
         .collect())
@@ -312,7 +501,7 @@ mod tests {
     use std::collections::BTreeMap;
     use std::sync::Arc;
 
-    use mass_spectrometry::prelude::{GenericSpectrum, SpectrumAlloc, SpectrumMut};
+    use mass_spectrometry::prelude::{GenericSpectrum, Spectrum, SpectrumAlloc, SpectrumMut};
 
     use super::{ComputeParams, MetricScorer, SimilarityMetric, preprocess_spectra_for_metric};
     use crate::model::{SpectrumMetadata, SpectrumRecord};
@@ -387,40 +576,68 @@ mod tests {
     }
 
     #[test]
-    fn linear_cosine_surfaces_invalid_peak_spacing() {
-        let left = record(0, &[(10.0, 1.0), (10.15, 0.5)]);
-        let right = record(1, &[(10.0, 1.0), (10.15, 0.5)]);
-        let scorer = MetricScorer::new(ComputeParams {
+    fn linear_cosine_preprocessing_merges_close_peaks() {
+        let params = ComputeParams {
             metric: SimilarityMetric::LinearCosine,
             fragment_mz_tolerance: 0.1,
             mz_power: 0.0,
             intensity_power: 1.0,
             top_n_peaks: None,
-        })
-        .expect("scorer");
+        };
+        let processed = preprocess_spectra_for_metric(
+            vec![
+                record(0, &[(10.0, 1.0), (10.15, 0.5)]),
+                record(1, &[(10.0, 1.0), (10.15, 0.5)]),
+            ],
+            params,
+        )
+        .expect("preprocess");
+        let scorer = MetricScorer::new(params).expect("scorer");
+        let (score, matches) = scorer
+            .similarity(
+                processed[0].spectrum.as_ref(),
+                processed[1].spectrum.as_ref(),
+                0,
+                1,
+            )
+            .expect("merged spectra should score");
 
-        let err = scorer
-            .similarity(left.spectrum.as_ref(), right.spectrum.as_ref(), 0, 1)
-            .expect_err("invalid spacing should error");
-        assert!(err.contains("LinearCosine failed"));
+        assert_eq!(processed[0].peaks.as_ref().len(), 2);
+        assert_eq!(processed[0].spectrum.as_ref().len(), 1);
+        assert_eq!(matches, 1);
+        assert!((score - 1.0).abs() < 1e-9);
     }
 
     #[test]
-    fn modified_linear_cosine_surfaces_invalid_peak_spacing() {
-        let left = record(0, &[(10.0, 1.0), (10.15, 0.5)]);
-        let right = record(1, &[(10.0, 1.0), (10.15, 0.5)]);
-        let scorer = MetricScorer::new(ComputeParams {
+    fn modified_linear_cosine_preprocessing_merges_close_peaks() {
+        let params = ComputeParams {
             metric: SimilarityMetric::ModifiedLinearCosine,
             fragment_mz_tolerance: 0.1,
             mz_power: 0.0,
             intensity_power: 1.0,
             top_n_peaks: None,
-        })
-        .expect("scorer");
+        };
+        let processed = preprocess_spectra_for_metric(
+            vec![
+                record(0, &[(10.0, 1.0), (10.15, 0.5)]),
+                record(1, &[(10.0, 1.0), (10.15, 0.5)]),
+            ],
+            params,
+        )
+        .expect("preprocess");
+        let scorer = MetricScorer::new(params).expect("scorer");
+        let (score, matches) = scorer
+            .similarity(
+                processed[0].spectrum.as_ref(),
+                processed[1].spectrum.as_ref(),
+                0,
+                1,
+            )
+            .expect("merged spectra should score");
 
-        let err = scorer
-            .similarity(left.spectrum.as_ref(), right.spectrum.as_ref(), 0, 1)
-            .expect_err("invalid spacing should error");
-        assert!(err.contains("ModifiedLinearCosine failed"));
+        assert_eq!(processed[0].peaks.as_ref().len(), 2);
+        assert_eq!(processed[0].spectrum.as_ref().len(), 1);
+        assert_eq!(matches, 1);
+        assert!((score - 1.0).abs() < 1e-9);
     }
 }
