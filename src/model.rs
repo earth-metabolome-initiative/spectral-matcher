@@ -15,6 +15,9 @@ pub struct ParseStats {
     pub ions_blocks: usize,
     /// Number of spectra accepted after parsing and filtering.
     pub accepted: usize,
+    /// Blocks with an explicit `MSLEVEL` other than 2, excluded before peak limits.
+    #[serde(default)]
+    pub dropped_non_ms2: usize,
     /// Spectra dropped because no preferred name could be resolved.
     pub dropped_missing_name: usize,
     /// Spectra dropped because no precursor m/z was available.

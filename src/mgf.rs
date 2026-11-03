@@ -369,6 +369,14 @@ fn parse_mgf_reader_local_with_progress<R: BufRead, F: FnMut(u64, ParseStats)>(
             peaks.clear();
             in_ions = true;
         } else if line == "END IONS" {
+            // An explicit MS level identifies the spectrum type, independently of
+            // precursor/name checks and peak-count limits. Legacy MGFs omit it.
+            if headers.get("MSLEVEL").is_some_and(|level| level != "2") {
+                stats.dropped_non_ms2 += 1;
+                in_ions = false;
+                on_progress(processed_bytes, stats);
+                continue;
+            }
             let raw_name = preferred_name(
                 &name,
                 &title,
@@ -680,5 +688,33 @@ END IONS
             Err(err) => err,
         };
         assert!(err.contains("duplicate spectrum_id 'dup'"));
+    }
+
+    #[test]
+    fn paired_ms1_does_not_mask_duplicate_ms2_feature_ids() {
+        let input = concat!(
+            "BEGIN IONS\nFEATURE_ID=dup\nMSLEVEL=1\nPEPMASS=100\n10 100\n20 80\n30 60\n40 40\n50 20\nEND IONS\n",
+            "BEGIN IONS\nFEATURE_ID=dup\nMSLEVEL=2\nPEPMASS=100\n10 100\n20 80\n30 60\n40 40\n50 20\nEND IONS\n",
+            "BEGIN IONS\nFEATURE_ID=dup\nMSLEVEL=2\nPEPMASS=100\n10 100\n20 80\n30 60\n40 40\n50 20\nEND IONS\n",
+        );
+        let err = match load_mgf_bytes("duplicate.mgf", input.as_bytes(), "FEATURE_ID", 5, 100) {
+            Ok(_) => panic!("duplicate MS2 ids should fail"),
+            Err(err) => err,
+        };
+        assert!(err.contains("duplicate spectrum_id 'dup'"));
+    }
+
+    #[test]
+    fn ms2_only_and_unmarked_mgfs_remain_eligible() {
+        for level in ["MSLEVEL=2\n", ""] {
+            let input = format!(
+                "BEGIN IONS\nFEATURE_ID=single\n{level}PEPMASS=100\n10 100\n20 80\n30 60\n40 40\n50 20\nEND IONS\n"
+            );
+            let loaded = load_mgf_bytes("single.mgf", input.as_bytes(), "FEATURE_ID", 5, 100)
+                .expect("MS2-only and legacy inputs parse");
+            assert_eq!(loaded.stats.accepted, 1);
+            assert_eq!(loaded.stats.dropped_non_ms2, 0);
+            assert_eq!(loaded.spectra[0].meta.spectrum_id, "single");
+        }
     }
 }

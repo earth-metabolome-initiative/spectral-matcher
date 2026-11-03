@@ -289,3 +289,103 @@ fn async_search_job_endpoints_work() {
         _ => panic!("unexpected result kind"),
     }
 }
+
+#[test]
+fn picoto_paired_mgf_uses_only_ms2_in_network_and_search() {
+    let paired = include_str!("fixtures/picoto-paired.mgf");
+    let parse = ParseConfig {
+        min_peaks: 5,
+        ..ParseConfig::default()
+    };
+    let build = NetworkBuildParams {
+        compute: spectral_matcher::ComputeParams {
+            metric: SimilarityMetric::HungarianCosine,
+            fragment_mz_tolerance: 0.2,
+            mz_power: 0.0,
+            intensity_power: 1.0,
+            top_n_peaks: None,
+        },
+        threshold: 0.0,
+        min_matched_peaks: 1,
+        top_k: 5,
+    };
+    let network = build_network_artifact(NetworkRequest {
+        source_label: "paired.mgf".to_string(),
+        mgf_text: Some(paired.to_string()),
+        mgf_path: None,
+        parse: parse.clone(),
+        build: build.clone(),
+    })
+    .expect("paired network");
+    assert_eq!(network.parse_stats.ions_blocks, 4);
+    assert_eq!(network.parse_stats.dropped_non_ms2, 2);
+    assert_eq!(network.parse_stats.dropped_too_few_peaks, 0);
+    assert_eq!(network.parse_stats.accepted, 2);
+    assert_eq!(network.network.nodes.len(), 2);
+    assert_eq!(
+        network
+            .spectra
+            .iter()
+            .map(|s| s.meta.spectrum_id.as_str())
+            .collect::<Vec<_>>(),
+        ["positive-1", "negative-2"]
+    );
+    for (spectrum, (charge, scan, file, rt)) in network.spectra.iter().zip([
+        ("1+", "42", "positive.mzML", "12.5"),
+        ("1-", "84", "negative.mzML", "15.5"),
+    ]) {
+        assert_eq!(
+            spectrum.meta.headers.get("MSLEVEL").map(String::as_str),
+            Some("2")
+        );
+        assert_eq!(
+            spectrum.meta.headers.get("CHARGE").map(String::as_str),
+            Some(charge)
+        );
+        assert_eq!(
+            spectrum.meta.headers.get("RTINSECONDS").map(String::as_str),
+            Some(rt)
+        );
+        assert_eq!(spectrum.meta.filename.as_deref(), Some(file));
+        assert_eq!(spectrum.meta.scans.as_deref(), Some(scan));
+        assert_eq!(
+            spectrum.meta.feature_id.as_deref(),
+            Some(spectrum.meta.spectrum_id.as_str())
+        );
+        assert_eq!(spectrum.peaks[0].0, 50.0);
+    }
+
+    let legacy = "BEGIN IONS\nFEATURE_ID=library-1\nPEPMASS=150\n50 100\n60 80\n70 60\n80 40\n90 20\nEND IONS\n";
+    let search = run_search_request(SearchRequest {
+        query_source_label: "paired.mgf".to_string(),
+        query_mgf_text: Some(paired.to_string()),
+        query_mgf_path: None,
+        library_source_label: "legacy.mgf".to_string(),
+        library_mgf_text: Some(legacy.to_string()),
+        library_mgf_path: None,
+        parse,
+        search: spectral_matcher::LibrarySearchParams {
+            compute: build.compute,
+            precursor_mz_tolerance: 0.01,
+            min_matched_peaks: 1,
+            min_similarity_threshold: 0.0,
+            top_n: 1,
+        },
+        taxonomy: None,
+        query_key: Some(spectral_matcher::SearchQueryKey::FeatureId),
+    })
+    .expect("paired search with ordinary library");
+    assert_eq!(search.query_stats.dropped_non_ms2, 2);
+    assert_eq!(search.library_stats.dropped_non_ms2, 0);
+    assert_eq!(search.query_spectra.len(), 2);
+    assert_eq!(search.library_spectra.len(), 1);
+    assert_eq!(search.result.hits.len(), 2);
+    assert!(search.tsv.contains("positive-1\tFEATURE_ID"));
+    assert!(search.tsv.contains("negative-2\tFEATURE_ID"));
+
+    let limited = load_mgf_bytes("paired.mgf", paired.as_bytes(), "FEATURE_ID", 1, 4)
+        .expect("MS1 selection precedes peak limits");
+    assert_eq!(limited.stats.dropped_non_ms2, 2);
+    assert_eq!(limited.stats.dropped_too_many_peaks, 2);
+    assert_eq!(limited.stats.accepted, 0);
+}

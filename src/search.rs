@@ -9,10 +9,10 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 #[cfg(not(target_arch = "wasm32"))]
 use std::sync::Mutex;
-#[cfg(not(target_arch = "wasm32"))]
-use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver};
+#[cfg(not(target_arch = "wasm32"))]
+use std::sync::{LazyLock, OnceLock};
 #[cfg(not(target_arch = "wasm32"))]
 use std::time::{Duration, UNIX_EPOCH};
 
@@ -37,6 +37,8 @@ use crate::network::PairScore;
 use crate::network::build_network;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::network::{SelectedNeighbor, build_network_from_selected_neighbors};
+#[cfg(not(target_arch = "wasm32"))]
+use crate::similarity::MetricIndexSearchState;
 use crate::similarity::{ComputeParams, MetricIndex, MetricScorer, preprocess_spectra_for_metric};
 use crate::taxonomy::{LotusMetadataIndex, ResolvedLotusQuery, short_inchikey_from_record};
 
@@ -110,6 +112,9 @@ struct SearchCandidate {
 
 #[derive(Clone, Debug)]
 struct SearchTaxonomyConfig {
+    #[cfg(not(target_arch = "wasm32"))]
+    lotus: Arc<LotusMetadataIndex>,
+    #[cfg(target_arch = "wasm32")]
     lotus: LotusMetadataIndex,
     query: ResolvedLotusQuery,
 }
@@ -129,7 +134,61 @@ struct CachedMgf {
     min_peaks: usize,
     max_peaks: usize,
     missing_precursor_policy: MissingPrecursorMz,
-    loaded: LoadedSpectra,
+    loaded: Arc<LoadedSpectra>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+struct PreparedLibrary {
+    loaded: Arc<LoadedSpectra>,
+    processed: Vec<SpectrumRecord>,
+    index: OnceLock<Result<Option<MetricIndex>, String>>,
+    search_states: OnceLock<IndexedSearchScratch>,
+}
+
+/// Each Rayon worker keeps its own index-sized scratch, even when Rayon splits
+/// the query iterator into many tasks. The final slot handles callers outside
+/// the pool and workers from a larger, separately configured pool.
+#[cfg(not(target_arch = "wasm32"))]
+struct IndexedSearchScratch {
+    workers: Vec<Mutex<MetricIndexSearchState>>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl IndexedSearchScratch {
+    fn new(index: &MetricIndex) -> Self {
+        let workers = (0..rayon::current_num_threads() + 1)
+            .map(|_| Mutex::new(index.new_search_state()))
+            .collect();
+        Self { workers }
+    }
+
+    fn for_current_worker(&self) -> &Mutex<MetricIndexSearchState> {
+        let fallback = self.workers.len() - 1;
+        let slot = rayon::current_thread_index()
+            .filter(|&index| index < fallback)
+            .unwrap_or(fallback);
+        &self.workers[slot]
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+struct CachedPreparedLibrary {
+    path: PathBuf,
+    fingerprint: FileFingerprint,
+    identifier: String,
+    min_peaks: usize,
+    max_peaks: usize,
+    missing_precursor_policy: MissingPrecursorMz,
+    compute: ComputeParams,
+    precursor_mz_tolerance: f64,
+    prepared: Arc<PreparedLibrary>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+struct CachedLotus {
+    path: PathBuf,
+    fingerprint: FileFingerprint,
+    index: Arc<LotusMetadataIndex>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -174,6 +233,28 @@ fn mgf_cache() -> &'static Mutex<HashMap<PathBuf, CachedMgf>> {
     CACHE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+fn prepared_library_cache() -> &'static Mutex<Option<CachedPreparedLibrary>> {
+    static CACHE: LazyLock<Mutex<Option<CachedPreparedLibrary>>> =
+        LazyLock::new(|| Mutex::new(None));
+    &CACHE
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn same_compute(left: ComputeParams, right: ComputeParams) -> bool {
+    left.metric == right.metric
+        && left.fragment_mz_tolerance.to_bits() == right.fragment_mz_tolerance.to_bits()
+        && left.mz_power.to_bits() == right.mz_power.to_bits()
+        && left.intensity_power.to_bits() == right.intensity_power.to_bits()
+        && left.top_n_peaks == right.top_n_peaks
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn lotus_cache() -> &'static Mutex<Option<CachedLotus>> {
+    static CACHE: LazyLock<Mutex<Option<CachedLotus>>> = LazyLock::new(|| Mutex::new(None));
+    &CACHE
+}
+
 fn network_missing_precursor_policy(parse: &ParseConfig) -> MissingPrecursorMz {
     match parse.missing_precursor_mz {
         MissingPrecursorMz::Reject => MissingPrecursorMz::UseZero,
@@ -201,11 +282,18 @@ fn load_search_taxonomy_config(
     request: &crate::api::SearchTaxonomyRequest,
 ) -> Result<SearchTaxonomyConfig, String> {
     let lotus = if let Some(text) = request.lotus_csv_text.as_deref() {
-        crate::taxonomy::load_lotus_bytes(text.as_bytes())?
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            Arc::new(crate::taxonomy::load_lotus_bytes(text.as_bytes())?)
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            crate::taxonomy::load_lotus_bytes(text.as_bytes())?
+        }
     } else if let Some(_path) = request.lotus_csv_path.as_deref() {
         #[cfg(not(target_arch = "wasm32"))]
         {
-            crate::taxonomy::load_lotus_path(std::path::Path::new(_path))?
+            load_lotus_path_cached(std::path::Path::new(_path))?
         }
         #[cfg(target_arch = "wasm32")]
         {
@@ -228,6 +316,33 @@ fn load_search_taxonomy_config(
         })?;
 
     Ok(SearchTaxonomyConfig { lotus, query })
+}
+
+/// Shares the immutable LOTUS index across file-based native searches without
+/// retaining an unbounded collection of large reference datasets.
+#[cfg(not(target_arch = "wasm32"))]
+fn load_lotus_path_cached(path: &Path) -> Result<Arc<LotusMetadataIndex>, String> {
+    let canonical = std::fs::canonicalize(path)
+        .map_err(|err| format!("cannot resolve {}: {err}", path.display()))?;
+    let fingerprint = file_fingerprint(&canonical)?;
+    // Hold the lock through the first load so concurrent requests for this path
+    // cannot each parse a separate copy of the large reference CSV.
+    let mut cached = lotus_cache()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some(entry) = cached.as_ref()
+        && entry.path == canonical
+        && entry.fingerprint == fingerprint
+    {
+        return Ok(Arc::clone(&entry.index));
+    }
+    let index = Arc::new(crate::taxonomy::load_lotus_path(&canonical)?);
+    *cached = Some(CachedLotus {
+        path: canonical,
+        fingerprint,
+        index: Arc::clone(&index),
+    });
+    Ok(index)
 }
 
 /// Expands the intermediate candidate budget when taxonomy reranking is enabled.
@@ -259,11 +374,13 @@ pub fn search_library(
         let done = Arc::new(AtomicUsize::new(0));
         let cancel = Arc::new(AtomicBool::new(false));
         let hits = if let Some(index) = MetricIndex::new(params.compute, &library).transpose()? {
+            let scratch = IndexedSearchScratch::new(&index);
             score_query_library_pairs_indexed(
                 &queries,
                 &library,
                 &params,
                 &index,
+                &scratch,
                 total,
                 done,
                 cancel,
@@ -540,22 +657,13 @@ where
         &on_progress,
     )?;
 
-    let library = load_request_spectra_with_progress(
-        JobProgressStage::LoadingLibrary,
-        &request.library_source_label,
-        request.library_mgf_text.as_deref(),
-        request.library_mgf_path.as_deref(),
-        request.parse.library_identifier(),
-        request.parse.min_peaks,
-        request.parse.max_peaks,
-        request.parse.missing_precursor_mz,
-        &on_progress,
-    )?;
+    let prepared_library = load_prepared_library_with_progress(&request, &on_progress)?;
+    let library = prepared_library.loaded.as_ref();
+    let library_processed = &prepared_library.processed;
 
     let queries_processed =
         preprocess_spectra_for_metric(queries.spectra.clone(), request.search.compute)?;
-    let library_processed =
-        preprocess_spectra_for_metric(library.spectra.clone(), request.search.compute)?;
+    // The prepared library and any Flash index are reused across file-based searches.
     let taxonomy = if let Some(taxonomy_request) = request.taxonomy.as_ref() {
         on_progress(JobProgressStage::LoadingTaxonomy, 0, 1);
         let loaded = load_search_taxonomy_config(taxonomy_request)?;
@@ -570,14 +678,28 @@ where
     let done = Arc::new(AtomicUsize::new(0));
     let cancel = Arc::new(AtomicBool::new(false));
     on_progress(JobProgressStage::Scoring, 0, total as u64);
-    let hits = if let Some(index) =
-        MetricIndex::new(search_params.compute, &library_processed).transpose()?
-    {
+    let index = prepared_library
+        .index
+        .get_or_init(|| {
+            MetricIndex::new_for_search(
+                search_params.compute,
+                library_processed,
+                search_params.precursor_mz_tolerance,
+            )
+            .transpose()
+        })
+        .as_ref()
+        .map_err(Clone::clone)?;
+    let hits = if let Some(index) = index.as_ref() {
+        let scratch = prepared_library
+            .search_states
+            .get_or_init(|| IndexedSearchScratch::new(index));
         score_query_library_pairs_indexed(
             &queries_processed,
-            &library_processed,
+            library_processed,
             &search_params,
-            &index,
+            index,
+            scratch,
             total,
             Arc::clone(&done),
             cancel,
@@ -630,7 +752,7 @@ where
     on_progress(JobProgressStage::Finalizing, 1, 1);
     Ok(SearchArtifact {
         query_source_label: queries.source_label,
-        library_source_label: library.source_label,
+        library_source_label: library.source_label.clone(),
         query_stats: queries.stats,
         library_stats: library.stats,
         search: request.search,
@@ -681,6 +803,92 @@ fn load_request_spectra(
     Err("request did not provide an MGF source".to_string())
 }
 
+/// Reuses one file-backed, metric-specific library across search requests.
+/// Only one large prepared library is retained; changing the file, parse
+/// policy or scoring parameters replaces it.
+#[cfg(not(target_arch = "wasm32"))]
+fn load_prepared_library_with_progress<F>(
+    request: &SearchRequest,
+    on_progress: &F,
+) -> Result<Arc<PreparedLibrary>, String>
+where
+    F: Fn(JobProgressStage, u64, u64) + Sync,
+{
+    let identifier = request.parse.library_identifier();
+    if let Some(path) = request.library_mgf_path.as_deref() {
+        let canonical =
+            std::fs::canonicalize(path).map_err(|err| format!("cannot resolve {path}: {err}"))?;
+        let fingerprint = file_fingerprint(&canonical)?;
+        let mut cached = prepared_library_cache()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(entry) = cached.as_ref()
+            && entry.path == canonical
+            && entry.fingerprint == fingerprint
+            && entry.identifier == identifier
+            && entry.min_peaks == request.parse.min_peaks
+            && entry.max_peaks == request.parse.max_peaks
+            && entry.missing_precursor_policy == request.parse.missing_precursor_mz
+            && same_compute(entry.compute, request.search.compute)
+            && entry.precursor_mz_tolerance.to_bits()
+                == request.search.precursor_mz_tolerance.to_bits()
+        {
+            let total = fingerprint.len.max(1);
+            on_progress(JobProgressStage::LoadingLibrary, total, total);
+            return Ok(Arc::clone(&entry.prepared));
+        }
+
+        let loaded = load_mgf_path_cached_with_progress(
+            &canonical,
+            identifier,
+            request.parse.min_peaks,
+            request.parse.max_peaks,
+            request.parse.missing_precursor_mz,
+            |completed, total| on_progress(JobProgressStage::LoadingLibrary, completed, total),
+        )?;
+        let prepared = prepare_loaded_library(loaded, request.search.compute)?;
+        *cached = Some(CachedPreparedLibrary {
+            path: canonical,
+            fingerprint,
+            identifier: identifier.to_string(),
+            min_peaks: request.parse.min_peaks,
+            max_peaks: request.parse.max_peaks,
+            missing_precursor_policy: request.parse.missing_precursor_mz,
+            compute: request.search.compute,
+            precursor_mz_tolerance: request.search.precursor_mz_tolerance,
+            prepared: Arc::clone(&prepared),
+        });
+        return Ok(prepared);
+    }
+
+    let loaded = load_request_spectra_with_progress(
+        JobProgressStage::LoadingLibrary,
+        &request.library_source_label,
+        request.library_mgf_text.as_deref(),
+        None,
+        identifier,
+        request.parse.min_peaks,
+        request.parse.max_peaks,
+        request.parse.missing_precursor_mz,
+        on_progress,
+    )?;
+    prepare_loaded_library(Arc::new(loaded), request.search.compute)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn prepare_loaded_library(
+    loaded: Arc<LoadedSpectra>,
+    compute: ComputeParams,
+) -> Result<Arc<PreparedLibrary>, String> {
+    let processed = preprocess_spectra_for_metric(loaded.spectra.clone(), compute)?;
+    Ok(Arc::new(PreparedLibrary {
+        loaded,
+        processed,
+        index: OnceLock::new(),
+        search_states: OnceLock::new(),
+    }))
+}
+
 /// Loads request spectra with stage-aware progress reporting in native builds.
 #[cfg(not(target_arch = "wasm32"))]
 fn load_request_spectra_with_progress<F>(
@@ -705,7 +913,8 @@ where
             max_peaks,
             missing_precursor_policy,
             |completed, total| on_progress(stage, completed, total),
-        );
+        )
+        .map(|loaded| loaded.as_ref().clone());
     }
 
     if let Some(text) = mgf_text {
@@ -735,7 +944,7 @@ fn load_mgf_path_cached_with_progress<F>(
     max_peaks: usize,
     missing_precursor_policy: MissingPrecursorMz,
     mut on_progress: F,
-) -> Result<LoadedSpectra, String>
+) -> Result<Arc<LoadedSpectra>, String>
 where
     F: FnMut(u64, u64),
 {
@@ -770,6 +979,7 @@ where
         if let Some(message) = handle.try_recv() {
             match message {
                 NativeLoadMessage::Finished(loaded) => {
+                    let loaded = Arc::new(loaded);
                     on_progress(total, total);
                     if let Ok(mut cache) = mgf_cache().lock() {
                         cache.insert(
@@ -780,7 +990,7 @@ where
                                 min_peaks,
                                 max_peaks,
                                 missing_precursor_policy,
-                                loaded: loaded.clone(),
+                                loaded: Arc::clone(&loaded),
                             },
                         );
                     }
@@ -853,11 +1063,13 @@ pub fn start_native_search(
                 }
                 None => None,
             } {
+                let scratch = IndexedSearchScratch::new(&index);
                 score_query_library_pairs_indexed(
                     &queries,
                     &library,
                     &params,
                     &index,
+                    &scratch,
                     total,
                     done_for_thread,
                     cancel_for_thread,
@@ -1090,7 +1302,7 @@ fn search_candidates(
     Ok(candidates)
 }
 
-/// Scores every query/library pair in parallel, applying candidate prefilters first.
+/// Scores only precursor-compatible query/library pairs in parallel.
 #[cfg(not(target_arch = "wasm32"))]
 fn score_query_library_pairs(
     queries: &[SpectrumRecord],
@@ -1103,57 +1315,108 @@ fn score_query_library_pairs(
     on_progress: &(impl Fn(JobProgressStage, u64, u64) + Sync),
     is_cancelled: &(impl Fn() -> bool + Sync),
 ) -> Result<Option<Vec<CandidateHit>>, String> {
+    if library.is_empty() {
+        return Ok(Some(Vec::new()));
+    }
+
+    // A sorted precursor lookup avoids visiting the full query × library product.
+    // Keep original indices so score ties and exported references remain unchanged.
+    let mut precursors: Vec<(f64, usize)> = library
+        .iter()
+        .enumerate()
+        .map(|(index, record)| (record.meta.precursor_mz, index))
+        .collect();
+    precursors
+        .sort_unstable_by(|left, right| left.0.total_cmp(&right.0).then(left.1.cmp(&right.1)));
+    let finite_start =
+        precursors.partition_point(|(mz, _)| mz.total_cmp(&f64::NEG_INFINITY).is_le());
+    let finite_end = precursors.partition_point(|(mz, _)| mz.total_cmp(&f64::INFINITY).is_lt());
+    let finite = &precursors[finite_start..finite_end];
+
     let error = Arc::new(Mutex::new(None::<String>));
     let error_worker = Arc::clone(&error);
     let done_for_iter = Arc::clone(&done_worker);
     let cancel_for_iter = Arc::clone(&cancel_worker);
     let report_every = progress_report_every(total);
 
-    let candidates: Vec<SearchCandidate> = (0..total)
-        .into_par_iter()
-        .filter_map(|flat_idx| {
-            if cancel_for_iter.load(Ordering::Relaxed) || is_cancelled() {
+    let candidates: Vec<SearchCandidate> = queries
+        .par_iter()
+        .enumerate()
+        .flat_map_iter(|(query_idx, query)| {
+            let was_cancelled = cancel_for_iter.load(Ordering::Relaxed) || is_cancelled();
+            if was_cancelled {
                 cancel_for_iter.store(true, Ordering::Relaxed);
-                return None;
             }
 
-            let query_idx = flat_idx / library.len();
-            let library_idx = flat_idx % library.len();
-            let completed = done_for_iter.fetch_add(1, Ordering::Relaxed) + 1;
-            if completed % report_every == 0 || completed == total {
-                on_progress(JobProgressStage::Scoring, completed as u64, total as u64);
-            }
-            if !search_precursor_mz_passes(&queries[query_idx], &library[library_idx], params) {
-                return None;
-            }
-            let left = queries[query_idx].spectrum.as_ref();
-            let right = library[library_idx].spectrum.as_ref();
-            match scorer.similarity(left, right, query_idx, library_idx) {
-                Ok((score, matches)) => {
-                    search_match_passes(score, matches, params).then_some(SearchCandidate {
-                        query_index: query_idx,
-                        library_index: library_idx,
-                        rank_before_taxonomy: 0,
-                        spectral_score: score,
-                        taxonomic_score: 0.0,
-                        combined_score: score,
-                        matches,
-                        matched_organism_name: None,
-                        matched_organism_wikidata: None,
-                        matched_shared_rank: None,
-                        matched_short_inchikey: None,
-                    })
+            let mz = query.meta.precursor_mz;
+            let tolerance = params.precursor_mz_tolerance;
+            let compatible = if was_cancelled {
+                &precursors[..0]
+            } else if mz.is_finite() && tolerance.is_finite() && tolerance >= 0.0 {
+                // Comparing the actual subtraction (not mz ± tolerance) retains
+                // the original floating-point boundary behavior exactly.
+                let start = finite.partition_point(|(other, _)| mz - other > tolerance);
+                let end = finite.partition_point(|(other, _)| other - mz <= tolerance);
+                &finite[start..end]
+            } else if tolerance.is_sign_positive() && tolerance.is_infinite() && !mz.is_nan() {
+                &precursors[..]
+            } else {
+                &precursors[..0]
+            };
+
+            if !was_cancelled {
+                let completed =
+                    done_for_iter.fetch_add(library.len(), Ordering::Relaxed) + library.len();
+                if completed / report_every != (completed - library.len()) / report_every
+                    || completed >= total
+                {
+                    on_progress(
+                        JobProgressStage::Scoring,
+                        completed.min(total) as u64,
+                        total as u64,
+                    );
                 }
-                Err(err) => {
-                    if let Ok(mut slot) = error_worker.lock()
-                        && slot.is_none()
-                    {
-                        *slot = Some(err);
+            }
+
+            let cancel = &cancel_for_iter;
+            let error_slot = &error_worker;
+            compatible.iter().filter_map(move |&(_, library_idx)| {
+                if cancel.load(Ordering::Relaxed) || is_cancelled() {
+                    cancel.store(true, Ordering::Relaxed);
+                    return None;
+                }
+                if !search_precursor_mz_passes(query, &library[library_idx], params) {
+                    return None;
+                }
+                let left = query.spectrum.as_ref();
+                let right = library[library_idx].spectrum.as_ref();
+                match scorer.similarity(left, right, query_idx, library_idx) {
+                    Ok((score, matches)) => {
+                        search_match_passes(score, matches, params).then_some(SearchCandidate {
+                            query_index: query_idx,
+                            library_index: library_idx,
+                            rank_before_taxonomy: 0,
+                            spectral_score: score,
+                            taxonomic_score: 0.0,
+                            combined_score: score,
+                            matches,
+                            matched_organism_name: None,
+                            matched_organism_wikidata: None,
+                            matched_shared_rank: None,
+                            matched_short_inchikey: None,
+                        })
                     }
-                    cancel_for_iter.store(true, Ordering::Relaxed);
-                    None
+                    Err(err) => {
+                        if let Ok(mut slot) = error_slot.lock()
+                            && slot.is_none()
+                        {
+                            *slot = Some(err);
+                        }
+                        cancel.store(true, Ordering::Relaxed);
+                        None
+                    }
                 }
-            }
+            })
         })
         .collect();
 
@@ -1175,6 +1438,7 @@ fn score_query_library_pairs_indexed(
     library: &[SpectrumRecord],
     params: &LibrarySearchParams,
     index: &MetricIndex,
+    scratch: &IndexedSearchScratch,
     total: usize,
     done_worker: Arc<AtomicUsize>,
     cancel_worker: Arc<AtomicBool>,
@@ -1190,62 +1454,72 @@ fn score_query_library_pairs_indexed(
     let candidates: Vec<SearchCandidate> = queries
         .par_iter()
         .enumerate()
-        .flat_map_iter(|(query_idx, query)| {
-            if cancel_for_iter.load(Ordering::Relaxed) || is_cancelled() {
-                cancel_for_iter.store(true, Ordering::Relaxed);
-                return Vec::new();
-            }
-
-            let mut state = index.new_search_state();
-            let results = match index.search_with_state(query, &mut state, query_idx) {
-                Ok(results) => results,
-                Err(err) => {
-                    if let Ok(mut slot) = error_worker.lock()
-                        && slot.is_none()
-                    {
-                        *slot = Some(err);
-                    }
+        .map_init(
+            || scratch.for_current_worker(),
+            |state, (query_idx, query)| {
+                if cancel_for_iter.load(Ordering::Relaxed) || is_cancelled() {
                     cancel_for_iter.store(true, Ordering::Relaxed);
                     return Vec::new();
                 }
-            };
 
-            let completed =
-                done_for_iter.fetch_add(library.len(), Ordering::Relaxed) + library.len();
-            if completed % report_every == 0 || completed >= total {
-                on_progress(
-                    JobProgressStage::Scoring,
-                    completed.min(total) as u64,
-                    total as u64,
-                );
-            }
+                let results = match {
+                    let mut state = state
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                    index.search_with_state(query, &mut state, query_idx)
+                } {
+                    Ok(results) => results,
+                    Err(err) => {
+                        if let Ok(mut slot) = error_worker.lock()
+                            && slot.is_none()
+                        {
+                            *slot = Some(err);
+                        }
+                        cancel_for_iter.store(true, Ordering::Relaxed);
+                        return Vec::new();
+                    }
+                };
 
-            results
-                .into_iter()
-                .filter_map(|hit| {
-                    let library_idx = hit.library_index;
-                    if library_idx >= library.len() {
-                        return None;
-                    }
-                    if !search_precursor_mz_passes(query, &library[library_idx], params) {
-                        return None;
-                    }
-                    search_match_passes(hit.score, hit.matches, params).then_some(SearchCandidate {
-                        query_index: query_idx,
-                        library_index: library_idx,
-                        rank_before_taxonomy: 0,
-                        spectral_score: hit.score,
-                        taxonomic_score: 0.0,
-                        combined_score: hit.score,
-                        matches: hit.matches,
-                        matched_organism_name: None,
-                        matched_organism_wikidata: None,
-                        matched_shared_rank: None,
-                        matched_short_inchikey: None,
+                let completed =
+                    done_for_iter.fetch_add(library.len(), Ordering::Relaxed) + library.len();
+                if completed % report_every == 0 || completed >= total {
+                    on_progress(
+                        JobProgressStage::Scoring,
+                        completed.min(total) as u64,
+                        total as u64,
+                    );
+                }
+
+                results
+                    .into_iter()
+                    .filter_map(|hit| {
+                        let library_idx = hit.library_index;
+                        if library_idx >= library.len() {
+                            return None;
+                        }
+                        if !search_precursor_mz_passes(query, &library[library_idx], params) {
+                            return None;
+                        }
+                        search_match_passes(hit.score, hit.matches, params).then_some(
+                            SearchCandidate {
+                                query_index: query_idx,
+                                library_index: library_idx,
+                                rank_before_taxonomy: 0,
+                                spectral_score: hit.score,
+                                taxonomic_score: 0.0,
+                                combined_score: hit.score,
+                                matches: hit.matches,
+                                matched_organism_name: None,
+                                matched_organism_wikidata: None,
+                                matched_shared_rank: None,
+                                matched_short_inchikey: None,
+                            },
+                        )
                     })
-                })
-                .collect::<Vec<_>>()
-        })
+                    .collect::<Vec<_>>()
+            },
+        )
+        .flat_map_iter(|hits| hits)
         .collect();
 
     if let Ok(mut slot) = error.lock()
@@ -1769,12 +2043,16 @@ mod tests {
 
     use mass_spectrometry::prelude::{GenericSpectrum, SpectrumAlloc, SpectrumMut};
 
+    #[cfg(not(target_arch = "wasm32"))]
+    use super::load_search_taxonomy_config;
     use super::{
         ComputeParams, IncrementalSearchState, IncrementalSearchStep, LibrarySearchParams,
         SearchResult, finalize_search_candidates, run_search_request, search_library,
         start_native_search, total_search_pairs,
     };
     use crate::api::MissingPrecursorMz;
+    #[cfg(not(target_arch = "wasm32"))]
+    use crate::api::SearchTaxonomyRequest;
     use crate::export::SearchQueryKey;
     use crate::model::{SpectrumMetadata, SpectrumRecord};
     use crate::similarity::{MetricIndex, MetricScorer, SimilarityMetric};
@@ -1815,6 +2093,209 @@ mod tests {
             intensity_power: 1.0,
             top_n_peaks: None,
         }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn hungarian_search_keeps_precursor_boundaries_and_library_ranking() {
+        let peaks = &[(10.0, 1.0), (20.0, 0.8), (30.0, 0.6)];
+        let query = spectrum(0, 100.0, peaks);
+        let mut nonfinite = spectrum(4, 100.0, peaks);
+        nonfinite.meta.precursor_mz = f64::NAN;
+        let library = vec![
+            spectrum(0, 100.1, peaks),
+            spectrum(1, 300.0, peaks),
+            spectrum(2, 99.9, peaks),
+            spectrum(3, 100.0, peaks),
+            nonfinite,
+        ];
+        let result = search_library(
+            vec![query],
+            library,
+            LibrarySearchParams {
+                compute: base_compute_params(SimilarityMetric::HungarianCosine),
+                precursor_mz_tolerance: (100.0_f64 - 100.1).abs(),
+                min_matched_peaks: 3,
+                min_similarity_threshold: 0.1,
+                top_n: 2,
+            },
+        )
+        .expect("search succeeds");
+        assert_eq!(
+            result
+                .hits
+                .iter()
+                .map(|hit| (hit.library_index, hit.rank))
+                .collect::<Vec<_>>(),
+            vec![(0, 1), (2, 2)]
+        );
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn parallel_precursor_lookup_matches_incremental_search() {
+        let peaks = &[(10.0, 1.0), (20.0, 0.8), (30.0, 0.6)];
+        let queries = vec![
+            spectrum(0, 100.0, peaks),
+            spectrum(1, 200.0, peaks),
+            spectrum(2, 300.0, peaks),
+        ];
+        let mut nonfinite = spectrum(7, 100.0, peaks);
+        nonfinite.meta.precursor_mz = f64::NAN;
+        let library = vec![
+            spectrum(0, 300.0, peaks),
+            spectrum(1, 100.1, peaks),
+            spectrum(2, 200.0, peaks),
+            spectrum(3, 100.0, peaks),
+            spectrum(4, 200.2, peaks),
+            spectrum(5, 99.9, peaks),
+            spectrum(6, 900.0, peaks),
+            nonfinite,
+        ];
+        for metric in [
+            SimilarityMetric::HungarianCosine,
+            SimilarityMetric::ModifiedHungarianCosine,
+        ] {
+            let params = LibrarySearchParams {
+                compute: base_compute_params(metric),
+                precursor_mz_tolerance: (100.0_f64 - 100.1).abs(),
+                min_matched_peaks: 3,
+                min_similarity_threshold: 0.1,
+                top_n: 2,
+            };
+            let parallel =
+                search_library(queries.clone(), library.clone(), params.clone()).expect("search");
+            let mut incremental =
+                IncrementalSearchState::new(queries.clone(), library.clone(), params)
+                    .expect("incremental search");
+            let serial = loop {
+                match incremental.step(3).expect("incremental step") {
+                    IncrementalSearchStep::Progress => {}
+                    IncrementalSearchStep::Finished(result) => break result,
+                    IncrementalSearchStep::Cancelled => panic!("unexpected cancellation"),
+                }
+            };
+            assert_eq!(parallel.hits, serial.hits, "{metric:?}");
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn file_based_lotus_index_is_reused_and_invalidated_when_file_changes() {
+        let path = std::env::temp_dir().join(format!(
+            "spectral-matcher-lotus-cache-{}-{}.csv",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system time")
+                .as_nanos()
+        ));
+        let header = "structure_inchikey,organism_wikidata,organism_name,organism_taxonomy_01domain,organism_taxonomy_02kingdom,organism_taxonomy_03phylum,organism_taxonomy_04class,organism_taxonomy_05order,organism_taxonomy_06family,organism_taxonomy_07tribe,organism_taxonomy_08genus,organism_taxonomy_09species,organism_taxonomy_10varietas\n";
+        let first_row = "ABCDEFGHIJKLMN-AAAA,Q1,Withania somnifera,Eukaryota,Archaeplastida,Streptophyta,Magnoliopsida,Solanales,Solanaceae,NA,Withania,Withania somnifera,NA\n";
+        std::fs::write(&path, format!("{header}{first_row}")).expect("write LOTUS CSV");
+
+        let mut request = SearchTaxonomyRequest {
+            query_text: "Withania somnifera".to_string(),
+            lotus_source_label: "test LOTUS".to_string(),
+            lotus_csv_text: None,
+            lotus_csv_path: Some(path.to_str().expect("UTF-8 temporary path").to_string()),
+        };
+        let first = load_search_taxonomy_config(&request).expect("first lookup");
+        request.query_text = "Q1".to_string();
+        let second = load_search_taxonomy_config(&request).expect("cached lookup");
+        assert!(Arc::ptr_eq(&first.lotus, &second.lotus));
+        assert_eq!(second.query.query_label, "Q1");
+
+        let second_row = "ZZZZZZZZZZZZZZ-BBBB,Q2,Panax ginseng,Eukaryota,Archaeplastida,Streptophyta,Magnoliopsida,Apiales,Araliaceae,NA,Panax,Panax ginseng,NA\n";
+        std::fs::write(&path, format!("{header}{first_row}{second_row}"))
+            .expect("update LOTUS CSV");
+        request.query_text = "Panax ginseng".to_string();
+        let updated = load_search_taxonomy_config(&request).expect("updated lookup");
+        assert!(!Arc::ptr_eq(&first.lotus, &updated.lotus));
+        assert_eq!(updated.query.query_label, "Panax ginseng");
+        std::fs::remove_file(&path).expect("remove temporary LOTUS CSV");
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn file_library_search_reflects_changed_library_and_metric_settings() {
+        let path = std::env::temp_dir().join(format!(
+            "spectral-matcher-library-{}-{}.mgf",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system time")
+                .as_nanos()
+        ));
+        let matching = "BEGIN IONS\nNAME=matching\nPEPMASS=100\n10 100\n20 80\n30 50\nEND IONS\n";
+        std::fs::write(&path, matching).expect("write library");
+        let mut request = crate::api::SearchRequest {
+            query_source_label: "query.mgf".to_string(),
+            query_mgf_text: Some(matching.replace("matching", "query")),
+            query_mgf_path: None,
+            library_source_label: path.display().to_string(),
+            library_mgf_text: None,
+            library_mgf_path: Some(path.display().to_string()),
+            parse: crate::api::ParseConfig {
+                identifier: "NAME".to_string(),
+                query_identifier: None,
+                library_identifier: None,
+                min_peaks: 3,
+                max_peaks: 1000,
+                missing_precursor_mz: MissingPrecursorMz::Reject,
+            },
+            search: LibrarySearchParams {
+                compute: base_compute_params(SimilarityMetric::ModifiedLinearCosine),
+                precursor_mz_tolerance: 0.1,
+                min_matched_peaks: 3,
+                min_similarity_threshold: 0.1,
+                top_n: 10,
+            },
+            taxonomy: None,
+            query_key: None,
+        };
+        let first = run_search_request(request.clone()).expect("first library search");
+        assert_eq!(first.result.hits.len(), 1);
+        assert_eq!(
+            run_search_request(request.clone())
+                .expect("repeat")
+                .result
+                .hits,
+            first.result.hits
+        );
+
+        std::fs::write(
+            &path,
+            format!(
+                "{matching}{}",
+                matching
+                    .replace("matching", "second")
+                    .replace("PEPMASS=100\n", "PEPMASS=100.05\n")
+            ),
+        )
+        .expect("replace library");
+        let updated = run_search_request(request.clone()).expect("updated library search");
+        assert_eq!(updated.result.hits.len(), 2);
+        assert_eq!(updated.library_stats.accepted, 2);
+
+        request.search.precursor_mz_tolerance = 0.01;
+        let narrower = run_search_request(request.clone()).expect("narrow precursor window");
+        assert_eq!(narrower.result.hits.len(), 1);
+        assert_eq!(narrower.result.hits[0].library_index, 0);
+        request.search.precursor_mz_tolerance = 0.1;
+
+        request.search.compute.top_n_peaks = Some(1);
+        let truncated = run_search_request(request.clone()).expect("changed peak cap");
+        assert!(truncated.result.hits.is_empty());
+        request.search.compute.top_n_peaks = None;
+
+        for metric in SimilarityMetric::ALL {
+            request.search.compute.metric = metric;
+            let result = run_search_request(request.clone()).expect("changed metric");
+            assert_eq!(result.result.metric, metric);
+            assert_eq!(result.result.hits.len(), 2, "{metric:?}");
+        }
+        std::fs::remove_file(&path).expect("remove test library");
     }
 
     #[test]

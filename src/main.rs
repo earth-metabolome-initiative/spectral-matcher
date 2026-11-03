@@ -355,8 +355,7 @@ where
     let _exe = args.next();
     let Some(command) = args.next() else {
         return Err(
-            "usage: spectral-matcher <serve|search|network|consensus|metrics|db> ..."
-                .to_string(),
+            "usage: spectral-matcher <serve|search|network|consensus|metrics|db> ...".to_string(),
         );
     };
     match command.as_str() {
@@ -650,12 +649,14 @@ fn run_search_job(
             min_similarity_threshold: job.search.min_similarity_threshold,
             top_n: job.search.top_n,
         },
-        taxonomy: job.taxonomy.map(|taxonomy| spectral_matcher::SearchTaxonomyRequest {
-            query_text: taxonomy.query,
-            lotus_source_label: taxonomy.lotus_csv.display().to_string(),
-            lotus_csv_text: None,
-            lotus_csv_path: Some(taxonomy.lotus_csv.display().to_string()),
-        }),
+        taxonomy: job
+            .taxonomy
+            .map(|taxonomy| spectral_matcher::SearchTaxonomyRequest {
+                query_text: taxonomy.query,
+                lotus_source_label: taxonomy.lotus_csv.display().to_string(),
+                lotus_csv_text: None,
+                lotus_csv_path: Some(taxonomy.lotus_csv.display().to_string()),
+            }),
         query_key: job.output.query_key,
     };
     let progress = CliProgress::new(format!("[search:{label}]"));
@@ -796,11 +797,8 @@ fn run_consensus_job(
         .map_err(|err| format!("{label}: failed to load left search artifact: {err}"))?;
     let right = load_search_artifact(&job.right_search_json)
         .map_err(|err| format!("{label}: failed to load right search artifact: {err}"))?;
-    let left_name = resolve_consensus_input_name(
-        job.left_name.as_deref(),
-        &left.library_source_label,
-        "left",
-    );
+    let left_name =
+        resolve_consensus_input_name(job.left_name.as_deref(), &left.library_source_label, "left");
     let right_name = resolve_consensus_input_name(
         job.right_name.as_deref(),
         &right.library_source_label,
@@ -996,13 +994,16 @@ fn escape_csv(value: &str) -> String {
 fn load_search_artifact(path: &Path) -> Result<SearchArtifact, String> {
     let raw = std::fs::read_to_string(path)
         .map_err(|err| format!("failed to read {}: {err}", path.display()))?;
-    serde_json::from_str(&raw)
-        .map_err(|err| format!("failed to parse {}: {err}", path.display()))
+    serde_json::from_str(&raw).map_err(|err| format!("failed to parse {}: {err}", path.display()))
 }
 
 /// Resolves the user-facing alias for one input consensus artifact.
 #[cfg(not(target_arch = "wasm32"))]
-fn resolve_consensus_input_name(explicit: Option<&str>, library_source_label: &str, fallback: &str) -> String {
+fn resolve_consensus_input_name(
+    explicit: Option<&str>,
+    library_source_label: &str,
+    fallback: &str,
+) -> String {
     let candidate = explicit
         .map(str::trim)
         .filter(|value| !value.is_empty())
@@ -1018,7 +1019,13 @@ fn resolve_consensus_input_name(explicit: Option<&str>, library_source_label: &s
         .unwrap_or_else(|| fallback.to_string());
     candidate
         .chars()
-        .map(|ch| if ch.is_ascii_alphanumeric() { ch.to_ascii_lowercase() } else { '_' })
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() {
+                ch.to_ascii_lowercase()
+            } else {
+                '_'
+            }
+        })
         .collect::<String>()
         .trim_matches('_')
         .to_string()

@@ -5,7 +5,7 @@ use std::sync::Arc;
 use mass_spectrometry::prelude::{
     FlashCosineIndex, FlashEntropyIndex, FlashSearchResult, GenericSpectrum, HungarianCosine,
     LinearCosine, LinearEntropy, ModifiedHungarianCosine, ModifiedLinearCosine,
-    ModifiedLinearEntropy, MsEntropyCleanSpectrum, ScalarSimilarity, SearchState,
+    ModifiedLinearEntropy, MsEntropyCleanSpectrum, PepmassFilter, ScalarSimilarity, SearchState,
     SimilarityComputationError, SiriusMergeClosePeaks, SpectraIndexBuilder, SpectralProcessor,
     SpectrumAlloc, SpectrumMut,
 };
@@ -172,6 +172,30 @@ pub struct MetricIndex {
 impl MetricIndex {
     /// Builds an index for metrics with a compatible flash backend.
     pub fn new(params: ComputeParams, library: &[SpectrumRecord]) -> Option<Result<Self, String>> {
+        Self::build_with_filter(params, library, PepmassFilter::disabled())
+    }
+
+    /// Builds a search index that prunes incompatible precursors before fragment scoring.
+    pub(crate) fn new_for_search(
+        params: ComputeParams,
+        library: &[SpectrumRecord],
+        precursor_mz_tolerance: f64,
+    ) -> Option<Result<Self, String>> {
+        let filter = PepmassFilter::within_tolerance(precursor_mz_tolerance).unwrap_or_default();
+        Self::build_with_filter(params, library, filter)
+    }
+
+    fn build_with_filter(
+        params: ComputeParams,
+        library: &[SpectrumRecord],
+        filter: PepmassFilter,
+    ) -> Option<Result<Self, String>> {
+        if matches!(
+            params.metric,
+            SimilarityMetric::HungarianCosine | SimilarityMetric::ModifiedHungarianCosine
+        ) {
+            return None;
+        }
         let spectra = library
             .iter()
             .map(|record| record.spectrum.as_ref().clone())
@@ -181,6 +205,7 @@ impl MetricIndex {
                 .mz_power(params.mz_power)
                 .intensity_power(params.intensity_power)
                 .mz_tolerance(params.fragment_mz_tolerance)
+                .pepmass_filter(filter)
                 .build(&spectra)
                 .map(MetricIndexInner::Cosine)
                 .map_err(|err| format!("failed to build LinearCosine flash index: {err:?}")),
@@ -188,6 +213,7 @@ impl MetricIndex {
                 .mz_power(params.mz_power)
                 .intensity_power(params.intensity_power)
                 .mz_tolerance(params.fragment_mz_tolerance)
+                .pepmass_filter(filter)
                 .build(&spectra)
                 .map(MetricIndexInner::ModifiedCosine)
                 .map_err(|err| {
@@ -198,6 +224,7 @@ impl MetricIndex {
                 .intensity_power(params.intensity_power)
                 .mz_tolerance(params.fragment_mz_tolerance)
                 .weighted(true)
+                .pepmass_filter(filter)
                 .build(&spectra)
                 .map(MetricIndexInner::Entropy)
                 .map_err(|err| {
@@ -208,6 +235,7 @@ impl MetricIndex {
                 .intensity_power(params.intensity_power)
                 .mz_tolerance(params.fragment_mz_tolerance)
                 .weighted(false)
+                .pepmass_filter(filter)
                 .build(&spectra)
                 .map(MetricIndexInner::Entropy)
                 .map_err(|err| {
@@ -218,6 +246,7 @@ impl MetricIndex {
                 .intensity_power(params.intensity_power)
                 .mz_tolerance(params.fragment_mz_tolerance)
                 .weighted(true)
+                .pepmass_filter(filter)
                 .build(&spectra)
                 .map(MetricIndexInner::ModifiedEntropy)
                 .map_err(|err| {
@@ -229,6 +258,7 @@ impl MetricIndex {
                     .intensity_power(params.intensity_power)
                     .mz_tolerance(params.fragment_mz_tolerance)
                     .weighted(false)
+                    .pepmass_filter(filter)
                     .build(&spectra)
                     .map(MetricIndexInner::ModifiedEntropy)
                     .map_err(|err| {
@@ -238,7 +268,7 @@ impl MetricIndex {
                     })
             }
             SimilarityMetric::HungarianCosine | SimilarityMetric::ModifiedHungarianCosine => {
-                return None;
+                unreachable!("Hungarian metrics have no Flash index")
             }
         };
 

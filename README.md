@@ -117,6 +117,14 @@ Notes:
 - `top_n_peaks` limits scoring to the most intense peaks per spectrum.
 - The CLI can appear quiet while computing; for larger jobs that is expected.
 
+### Picoto paired MGF inputs
+
+Use Picoto's `*_sirius.mgf` directly as `input_mgf` for a network or `query_mgf` for a search. No special parse option is needed: blocks with `MSLEVEL=2` are scored; blocks with an explicit other `MSLEVEL` (including correlated-isotope `MSLEVEL=1`) are excluded **before** `min_peaks`, `max_peaks`, and duplicate-ID checks. Blocks without `MSLEVEL` remain eligible, so a search can use a Picoto query against an ordinary MGF library with the same `[jobs.parse]` configuration. Duplicate IDs among retained MS2 spectra still fail loading.
+
+Keep `identifier = "FEATURE_ID"` to preserve the Picoto feature-list TSV join key. Network JSON `spectra[].meta` and search JSON `query_spectra[]` retain `feature_id`, `filename`, `scans`, and original `headers` such as `CHARGE` and `RTINSECONDS`. Across files, identify a feature by **source file plus feature ID**, not the feature ID alone. Search TSV `query_export_key` can use `FeatureId`; use search JSON metadata when the source filename, scan, retention time, or charge is also needed.
+
+`parse_stats.dropped_non_ms2` counts explicitly non-MS2 blocks. `dropped_too_many_peaks` separately counts MS2 (or unmarked legacy) blocks exceeding `max_peaks` (default 1000); raise `max_peaks` in `[jobs.parse]` if those fragments are needed. The default `min_peaks` remains 5.
+
 ## Available Metrics
 
 - `HungarianCosine`: exact cosine matching with Hungarian assignment; default and most robust.
@@ -178,6 +186,10 @@ Outputs:
 - `out/mapp_vs_isdb_lotus/search.tsv`
 
 With `output_dir = "out"`, the CLI derives search outputs as `<output_dir>/<name>/search.json` and `<output_dir>/<name>/search.tsv`.
+
+Native searches use Rayon for spectral scoring and MGF record conversion. Hungarian library searches use a sorted precursor-m/z lookup, while Flash-backed linear cosine and entropy searches prune by `precursor_mz_tolerance` **inside** their indexes before fragment scoring. Indexed searches retain one scratch state per Rayon worker (plus a fallback slot) across task splits and successive files using the same prepared library; scoring progress still counts the logical pair total.
+
+All file-based search metrics reuse the parsed and preprocessed library within one process; Flash-backed metrics also reuse their built similarity index. The one-library prepared cache is replaced when the canonical MGF path, file size/mtime, parse settings, metric computation settings, or precursor-m/z tolerance changes. LOTUS taxonomy metadata is cached separately and invalidated when its source changes. Restarting the process rebuilds both indexes. `RAYON_NUM_THREADS` caps the shared scoring pool, but the maximum hardware thread count is not necessarily fastest: compare elapsed times for representative searches at several settings, especially if other work runs concurrently.
 
 If you need custom locations, you can still set explicit `output_json`, `output_tsv`, or `output_csv_dir` fields on individual jobs.
 
