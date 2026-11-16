@@ -23,3 +23,8 @@ target
 # Fixtures
 fixtures
 out
+
+# Locally supplied spectra, databases, metadata, and private configurations
+data/
+databases/
+config/*.local.toml

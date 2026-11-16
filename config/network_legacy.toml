@@ -1,10 +1,10 @@
-output_dir = "/Users/pma/git_repos/EMI/spectral-matcher/out"
+output_dir = "out"
 
 [[jobs]]
 # Human-readable job name used to derive output paths under `output_dir`.
 name = "mapp_batch_00231"
 # Input MGF used to build the network.
-input_mgf = "/Users/pma/git_repos/EMI/spectral-matcher/fixtures/mapp_batch_00231.mgf"
+input_mgf = "fixtures/mapp_batch_00231.mgf"
 
 [jobs.parse]
 # Original spectrum field reused verbatim as the canonical exported identifier.

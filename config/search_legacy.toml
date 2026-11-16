@@ -1,9 +1,9 @@
-output_dir = "/Users/pma/git_repos/EMI/spectral-matcher/out"
+output_dir = "out"
 
 [[jobs]]
 name = "mapp_vs_isdb_lotus"
-query_mgf = "/Users/pma/git_repos/EMI/spectral-matcher/fixtures/mapp_batch_00231.mgf"
-library_mgf = "/Users/pma/01_large_files/mgf/isdb_lotus_pos_energySum.mgf"
+query_mgf = "fixtures/mapp_batch_00231.mgf"
+library_mgf = "databases/isdb_lotus_pos_energySum.mgf"
 
 [jobs.parse]
 identifier = "FEATURE_ID"
@@ -24,7 +24,7 @@ top_n = 20
 
 [jobs.taxonomy]
 query = "Withania somnifera"
-lotus_csv = "/Users/pma/01_large_files/lotus/230106_frozen_metadata.csv"
+lotus_csv = "data/lotus/230106_frozen_metadata.csv"
 validate_with_otol = true
 otol_context = "Flowering plants"
 
