@@ -467,6 +467,14 @@ pub struct SearchArtifactHit {
     pub matched_shared_rank: Option<String>,
     /// Short InChIKey used to link spectra to LOTUS biosource metadata.
     pub matched_short_inchikey: Option<String>,
+    /// Full InChIKey of the selected LOTUS biosource, distinct from the library candidate.
+    pub matched_lotus_inchikey: Option<String>,
+    /// Structure Wikidata identifier from the selected LOTUS row.
+    pub matched_lotus_structure_wikidata: Option<String>,
+    /// Reference Wikidata identifier from the selected LOTUS row.
+    pub matched_lotus_reference_wikidata: Option<String>,
+    /// Reference DOI from the selected LOTUS row.
+    pub matched_lotus_reference_doi: Option<String>,
 }
 
 /// Minimal health-check payload served by the HTTP API.

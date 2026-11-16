@@ -489,6 +489,10 @@ mod tests {
             matched_organism_wikidata: Some("Q1".to_string()),
             matched_shared_rank: Some("species".to_string()),
             matched_short_inchikey: short_inchikey.map(ToOwned::to_owned),
+            matched_lotus_inchikey: None,
+            matched_lotus_structure_wikidata: None,
+            matched_lotus_reference_wikidata: None,
+            matched_lotus_reference_doi: None,
         }
     }
 

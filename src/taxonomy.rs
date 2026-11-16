@@ -160,6 +160,10 @@ pub struct LotusBiosource {
     pub organism_name: String,
     pub organism_wikidata: Option<String>,
     pub lineage: TaxonomyLineage,
+    pub matched_lotus_inchikey: Option<String>,
+    pub matched_lotus_structure_wikidata: Option<String>,
+    pub matched_lotus_reference_wikidata: Option<String>,
+    pub matched_lotus_reference_doi: Option<String>,
 }
 
 /// Query lineage resolved from a user-supplied organism or taxon name.
@@ -203,6 +207,10 @@ pub struct TaxonomicMatch {
     pub matched_organism_name: Option<String>,
     pub matched_organism_wikidata: Option<String>,
     pub matched_short_inchikey: Option<String>,
+    pub matched_lotus_inchikey: Option<String>,
+    pub matched_lotus_structure_wikidata: Option<String>,
+    pub matched_lotus_reference_wikidata: Option<String>,
+    pub matched_lotus_reference_doi: Option<String>,
 }
 
 /// Index built from LOTUS metadata for resolving query taxa and matching candidates.
@@ -256,31 +264,33 @@ impl LotusMetadataIndex {
         for biosource in biosources {
             let shared_rank = biosource.lineage.deepest_shared_rank(query_lineage);
             let score = shared_rank.map(TaxonomicRank::score).unwrap_or(0);
-            let candidate = TaxonomicMatch {
-                score,
-                shared_rank,
-                matched_organism_name: Some(biosource.organism_name.clone()),
-                matched_organism_wikidata: biosource.organism_wikidata.clone(),
-                matched_short_inchikey: Some(short_inchikey.to_string()),
-            };
-
             let replace = match &best {
                 None => true,
                 Some(current) => {
-                    candidate.score > current.score
-                        || (candidate.score == current.score
+                    score > current.score
+                        || (score == current.score
                             && biosource.lineage.specificity_score()
                                 > current
                                     .shared_rank
                                     .map(|rank| rank.score() as usize)
                                     .unwrap_or(0))
-                        || (candidate.score == current.score
-                            && candidate.matched_organism_name.as_deref()
+                        || (score == current.score
+                            && Some(biosource.organism_name.as_str())
                                 < current.matched_organism_name.as_deref())
                 }
             };
             if replace {
-                best = Some(candidate);
+                best = Some(TaxonomicMatch {
+                    score,
+                    shared_rank,
+                    matched_organism_name: Some(biosource.organism_name.clone()),
+                    matched_organism_wikidata: biosource.organism_wikidata.clone(),
+                    matched_short_inchikey: Some(short_inchikey.to_string()),
+                    matched_lotus_inchikey: biosource.matched_lotus_inchikey.clone(),
+                    matched_lotus_structure_wikidata: biosource.matched_lotus_structure_wikidata.clone(),
+                    matched_lotus_reference_wikidata: biosource.matched_lotus_reference_wikidata.clone(),
+                    matched_lotus_reference_doi: biosource.matched_lotus_reference_doi.clone(),
+                });
             }
         }
 
@@ -387,6 +397,9 @@ fn parse_lotus_reader<R: Read>(reader: R) -> Result<LotusMetadataIndex, String> 
     let short_inchikey_idx = header_index(&headers, "structure_inchikey")?;
     let organism_name_idx = header_index(&headers, "organism_name")?;
     let organism_wikidata_idx = header_index(&headers, "organism_wikidata")?;
+    let structure_wikidata_idx = headers.iter().position(|name| name == "structure_wikidata");
+    let reference_wikidata_idx = headers.iter().position(|name| name == "reference_wikidata");
+    let reference_doi_idx = headers.iter().position(|name| name == "reference_doi");
     let taxonomy_indices = TAXONOMY_COLUMN_NAMES
         .iter()
         .map(|name| header_index(&headers, name))
@@ -402,6 +415,12 @@ fn parse_lotus_reader<R: Read>(reader: R) -> Result<LotusMetadataIndex, String> 
 
         let Some(short_key) = record.get(short_inchikey_idx).and_then(short_inchikey) else {
             continue;
+        };
+        let source_value = |idx: Option<usize>| {
+            idx.and_then(|idx| record.get(idx))
+                .map(str::trim)
+                .filter(|value| !value.is_empty() && *value != "NA")
+                .map(ToOwned::to_owned)
         };
         let organism_name = record
             .get(organism_name_idx)
@@ -432,6 +451,10 @@ fn parse_lotus_reader<R: Read>(reader: R) -> Result<LotusMetadataIndex, String> 
             organism_name: organism_name.clone(),
             organism_wikidata: organism_wikidata.clone(),
             lineage: lineage.clone(),
+            matched_lotus_inchikey: source_value(Some(short_inchikey_idx)),
+            matched_lotus_structure_wikidata: source_value(structure_wikidata_idx),
+            matched_lotus_reference_wikidata: source_value(reference_wikidata_idx),
+            matched_lotus_reference_doi: source_value(reference_doi_idx),
         };
         by_short_inchikey
             .entry(short_key)

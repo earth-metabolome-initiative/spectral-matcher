@@ -407,6 +407,10 @@ fn consensus_cli_merges_two_search_artifacts_into_one_annotation_per_query() {
                 matched_organism_wikidata: Some("Q1".to_string()),
                 matched_shared_rank: Some("species".to_string()),
                 matched_short_inchikey: Some("BBBBBBBBBBBBBB".to_string()),
+                matched_lotus_inchikey: None,
+                matched_lotus_structure_wikidata: None,
+                matched_lotus_reference_wikidata: None,
+                matched_lotus_reference_doi: None,
             },
             SearchArtifactHit {
                 query_index: 0,
@@ -422,6 +426,10 @@ fn consensus_cli_merges_two_search_artifacts_into_one_annotation_per_query() {
                 matched_organism_wikidata: Some("Q1".to_string()),
                 matched_shared_rank: Some("species".to_string()),
                 matched_short_inchikey: Some("AAAAAAAAAAAAAA".to_string()),
+                matched_lotus_inchikey: None,
+                matched_lotus_structure_wikidata: None,
+                matched_lotus_reference_wikidata: None,
+                matched_lotus_reference_doi: None,
             },
         ],
     );
@@ -447,6 +455,10 @@ fn consensus_cli_merges_two_search_artifacts_into_one_annotation_per_query() {
                 matched_organism_wikidata: Some("Q1".to_string()),
                 matched_shared_rank: Some("species".to_string()),
                 matched_short_inchikey: Some("CCCCCCCCCCCCCC".to_string()),
+                matched_lotus_inchikey: None,
+                matched_lotus_structure_wikidata: None,
+                matched_lotus_reference_wikidata: None,
+                matched_lotus_reference_doi: None,
             },
             SearchArtifactHit {
                 query_index: 0,
@@ -462,6 +474,10 @@ fn consensus_cli_merges_two_search_artifacts_into_one_annotation_per_query() {
                 matched_organism_wikidata: Some("Q1".to_string()),
                 matched_shared_rank: Some("species".to_string()),
                 matched_short_inchikey: Some("AAAAAAAAAAAAAA".to_string()),
+                matched_lotus_inchikey: None,
+                matched_lotus_structure_wikidata: None,
+                matched_lotus_reference_wikidata: None,
+                matched_lotus_reference_doi: None,
             },
         ],
     );

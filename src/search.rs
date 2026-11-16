@@ -108,6 +108,10 @@ struct SearchCandidate {
     matched_organism_wikidata: Option<String>,
     matched_shared_rank: Option<String>,
     matched_short_inchikey: Option<String>,
+    matched_lotus_inchikey: Option<String>,
+    matched_lotus_structure_wikidata: Option<String>,
+    matched_lotus_reference_wikidata: Option<String>,
+    matched_lotus_reference_doi: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -1237,6 +1241,10 @@ impl IncrementalSearchState {
                         matched_organism_wikidata: None,
                         matched_shared_rank: None,
                         matched_short_inchikey: None,
+                        matched_lotus_inchikey: None,
+                        matched_lotus_structure_wikidata: None,
+                        matched_lotus_reference_wikidata: None,
+                        matched_lotus_reference_doi: None,
                     });
                 }
             }
@@ -1295,6 +1303,10 @@ fn search_candidates(
                     matched_organism_wikidata: None,
                     matched_shared_rank: None,
                     matched_short_inchikey: None,
+                    matched_lotus_inchikey: None,
+                    matched_lotus_structure_wikidata: None,
+                    matched_lotus_reference_wikidata: None,
+                    matched_lotus_reference_doi: None,
                 });
             }
         }
@@ -1404,6 +1416,10 @@ fn score_query_library_pairs(
                             matched_organism_wikidata: None,
                             matched_shared_rank: None,
                             matched_short_inchikey: None,
+                            matched_lotus_inchikey: None,
+                            matched_lotus_structure_wikidata: None,
+                            matched_lotus_reference_wikidata: None,
+                            matched_lotus_reference_doi: None,
                         })
                     }
                     Err(err) => {
@@ -1513,6 +1529,10 @@ fn score_query_library_pairs_indexed(
                                 matched_organism_wikidata: None,
                                 matched_shared_rank: None,
                                 matched_short_inchikey: None,
+                                matched_lotus_inchikey: None,
+                                matched_lotus_structure_wikidata: None,
+                                matched_lotus_reference_wikidata: None,
+                                matched_lotus_reference_doi: None,
                             },
                         )
                     })
@@ -1913,6 +1933,10 @@ fn enrich_search_hits(
                     matched_organism_wikidata: None,
                     matched_shared_rank: None,
                     matched_short_inchikey: None,
+                    matched_lotus_inchikey: None,
+                    matched_lotus_structure_wikidata: None,
+                    matched_lotus_reference_wikidata: None,
+                    matched_lotus_reference_doi: None,
                 }
             })
             .collect()
@@ -1932,6 +1956,10 @@ fn build_search_candidate(
         matched_organism_wikidata,
         matched_shared_rank,
         matched_short_inchikey,
+        matched_lotus_inchikey,
+        matched_lotus_structure_wikidata,
+        matched_lotus_reference_wikidata,
+        matched_lotus_reference_doi,
     ) = if let Some(config) = taxonomy {
         let short_inchikey = short_inchikey_from_record(library_record);
         match short_inchikey
@@ -1944,11 +1972,15 @@ fn build_search_candidate(
                 matched.matched_organism_wikidata,
                 matched.shared_rank.map(|rank| rank.label().to_string()),
                 matched.matched_short_inchikey,
+                matched.matched_lotus_inchikey,
+                matched.matched_lotus_structure_wikidata,
+                matched.matched_lotus_reference_wikidata,
+                matched.matched_lotus_reference_doi,
             ),
-            None => (0.0, None, None, None, short_inchikey),
+            None => (0.0, None, None, None, short_inchikey, None, None, None, None),
         }
     } else {
-        (0.0, None, None, None, None)
+        (0.0, None, None, None, None, None, None, None, None)
     };
 
     SearchCandidate {
@@ -1963,6 +1995,10 @@ fn build_search_candidate(
         matched_organism_wikidata,
         matched_shared_rank,
         matched_short_inchikey,
+        matched_lotus_inchikey,
+        matched_lotus_structure_wikidata,
+        matched_lotus_reference_wikidata,
+        matched_lotus_reference_doi,
     }
 }
 
@@ -2005,6 +2041,10 @@ fn finalize_search_artifact_candidates(
                 matched_organism_wikidata: hit.matched_organism_wikidata,
                 matched_shared_rank: hit.matched_shared_rank,
                 matched_short_inchikey: hit.matched_short_inchikey,
+                matched_lotus_inchikey: hit.matched_lotus_inchikey,
+                matched_lotus_structure_wikidata: hit.matched_lotus_structure_wikidata,
+                matched_lotus_reference_wikidata: hit.matched_lotus_reference_wikidata,
+                matched_lotus_reference_doi: hit.matched_lotus_reference_doi,
             });
         }
     }
@@ -2351,7 +2391,7 @@ mod tests {
             library_mgf_text: Some(
                 concat!(
                     "BEGIN IONS\nNAME=withania\nPEPMASS=100.0\n",
-                    "INCHIKEY=AAAAAAAAAAAAAA-111\n",
+                    "INCHIKEY=AAAAAAAAAAAAAA-CANDIDATE\n",
                     "10 100\n21 80\n35 30\nEND IONS\n",
                     "BEGIN IONS\nNAME=panax\nPEPMASS=100.0\n",
                     "INCHIKEY=BBBBBBBBBBBBBB-222\n",
@@ -2380,9 +2420,10 @@ mod tests {
                 lotus_source_label: "lotus.csv".to_string(),
                 lotus_csv_text: Some(
                     concat!(
-                        "structure_inchikey,organism_wikidata,organism_name,organism_taxonomy_01domain,organism_taxonomy_02kingdom,organism_taxonomy_03phylum,organism_taxonomy_04class,organism_taxonomy_05order,organism_taxonomy_06family,organism_taxonomy_07tribe,organism_taxonomy_08genus,organism_taxonomy_09species,organism_taxonomy_10varietas\n",
-                        "\"AAAAAAAAAAAAAA-111\",http://www.wikidata.org/entity/Q1,\"Withania somnifera\",Eukaryota,Archaeplastida,Streptophyta,Magnoliopsida,Solanales,Solanaceae,NA,Withania,Withania somnifera,NA\n",
-                        "\"BBBBBBBBBBBBBB-222\",http://www.wikidata.org/entity/Q2,\"Panax ginseng\",Eukaryota,Archaeplastida,Streptophyta,Magnoliopsida,Apiales,Araliaceae,NA,Panax,Panax ginseng,NA\n",
+                        "structure_inchikey,organism_wikidata,organism_name,organism_taxonomy_01domain,organism_taxonomy_02kingdom,organism_taxonomy_03phylum,organism_taxonomy_04class,organism_taxonomy_05order,organism_taxonomy_06family,organism_taxonomy_07tribe,organism_taxonomy_08genus,organism_taxonomy_09species,organism_taxonomy_10varietas,structure_wikidata,reference_wikidata,reference_doi\n",
+                        "\"AAAAAAAAAAAAAA-SUPPORT\",http://www.wikidata.org/entity/Q1,\"Withania somnifera\",Eukaryota,Archaeplastida,Streptophyta,Magnoliopsida,Solanales,Solanaceae,NA,Withania,Withania somnifera,NA,Q105282296,Q105282295,10.1007/BF00565881\n",
+                        "\"AAAAAAAAAAAAAA-OTHER\",http://www.wikidata.org/entity/Q4,\"Withania coagulans\",Eukaryota,Archaeplastida,Streptophyta,Magnoliopsida,Solanales,Solanaceae,NA,Withania,Withania coagulans,NA,Q4,Q5,10.1/other\n",
+                        "\"BBBBBBBBBBBBBB-222\",http://www.wikidata.org/entity/Q2,\"Panax ginseng\",Eukaryota,Archaeplastida,Streptophyta,Magnoliopsida,Apiales,Araliaceae,NA,Panax,Panax ginseng,NA,,,\n",
                     )
                     .to_string(),
                 ),
@@ -2401,6 +2442,15 @@ mod tests {
         assert_eq!(artifact.result.hits.len(), 1);
         assert_eq!(artifact.result.hits[0].library_index, 0);
         assert_eq!(artifact.result.hits[0].taxonomic_score, 9.0);
+        assert_eq!(
+            artifact.library_spectra[0].headers.get("INCHIKEY").map(String::as_str),
+            Some("AAAAAAAAAAAAAA-CANDIDATE")
+        );
+        let support = &artifact.result.hits[0];
+        assert_eq!(support.matched_lotus_inchikey.as_deref(), Some("AAAAAAAAAAAAAA-SUPPORT"));
+        assert_eq!(support.matched_lotus_structure_wikidata.as_deref(), Some("Q105282296"));
+        assert_eq!(support.matched_lotus_reference_wikidata.as_deref(), Some("Q105282295"));
+        assert_eq!(support.matched_lotus_reference_doi.as_deref(), Some("10.1007/BF00565881"));
         assert_eq!(
             artifact.result.hits[0].matched_organism_name.as_deref(),
             Some("Withania somnifera")
@@ -2492,6 +2542,10 @@ mod tests {
                         matched_organism_wikidata: None,
                         matched_shared_rank: None,
                         matched_short_inchikey: None,
+                        matched_lotus_inchikey: None,
+                        matched_lotus_structure_wikidata: None,
+                        matched_lotus_reference_wikidata: None,
+                        matched_lotus_reference_doi: None,
                     },
                     super::SearchCandidate {
                         query_index: 0,
@@ -2505,6 +2559,10 @@ mod tests {
                         matched_organism_wikidata: None,
                         matched_shared_rank: None,
                         matched_short_inchikey: None,
+                        matched_lotus_inchikey: None,
+                        matched_lotus_structure_wikidata: None,
+                        matched_lotus_reference_wikidata: None,
+                        matched_lotus_reference_doi: None,
                     },
                     super::SearchCandidate {
                         query_index: 0,
@@ -2518,6 +2576,10 @@ mod tests {
                         matched_organism_wikidata: None,
                         matched_shared_rank: None,
                         matched_short_inchikey: None,
+                        matched_lotus_inchikey: None,
+                        matched_lotus_structure_wikidata: None,
+                        matched_lotus_reference_wikidata: None,
+                        matched_lotus_reference_doi: None,
                     },
                 ],
                 3,
