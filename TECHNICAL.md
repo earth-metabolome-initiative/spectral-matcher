@@ -192,6 +192,24 @@ With `output_dir = "out"`, the CLI derives search outputs as `<output_dir>/<name
 
 When taxonomic reranking is requested, the hit's `matched_lotus_inchikey`, `matched_lotus_structure_wikidata`, `matched_lotus_reference_wikidata`, and `matched_lotus_reference_doi` in search JSON identify the **specific selected LOTUS biosource row** (when the optional CSV columns are available). The library hit's full InChIKey can differ from that row's full key because reranking joins on the first 14 InChIKey characters. A species-level bonus means a *related structure* has that recorded biosource, not that the library candidate's exact Wikidata item has a direct occurrence claim.
 
+### Per-feature taxonomy for mixed-species MZmine batches
+
+Do **not** set one `query` taxon for a batch containing multiple sample taxa. For `mapp_batch_00283`, use `mapp_batch_00283_iimn_gnps.mgf` as both the network input and the search query. Copy `config/search_feature_taxonomy.toml` to `config/search.00283.local.toml`, set its `query_mgf` to `../../../mapp-metabolomics-unit/sa2026-dbgi/docs/mapp_project_00050/mapp_batch_00283/results/mzmine/mapp_batch_00283_iimn_gnps.mgf`, and replace the two sample-data paths with:
+
+```toml
+[jobs.taxonomy]
+lotus_csv = "data/lotus/230106_frozen_metadata.csv"
+feature_quant_csv = "../../../mapp-metabolomics-unit/sa2026-dbgi/docs/mapp_project_00050/mapp_batch_00283/results/mzmine/mapp_batch_00283_iimn_gnps_quant.csv"
+sample_metadata_csv = "../../../mapp-metabolomics-unit/sa2026-dbgi/docs/mapp_project_00050/mapp_batch_00283/results/mzmine/mapp_batch_00283_metadata.csv"
+taxon_column = "field_taxon_name_unified"
+```
+
+Supply the LOTUS CSV separately and adjust paths for your checkout. Run `cargo run -- db download isdb_lotus_pos_energysum` if needed; the example already points `library_mgf` at the downloaded file. Run `cargo run -- search --config config/search.00283.local.toml` for the per-feature search. For the network, copy `config/network.toml` to `config/network.00283.local.toml`, set its `input_mgf` to the same MGF and its `name` to `mapp_batch_00283`, then run `cargo run -- network --config config/network.00283.local.toml`.
+
+For each MGF `FEATURE_ID`, the search joins quantification `row ID`, takes **positive** `<filename>.mzML Peak area` values, and joins the filename (without the exact ` Peak area` suffix) to metadata `filename`. Rows with `sample_type` other than `sample` (QC and blanks) do not contribute. The metadata lineage uses `col_domain`, `col_kingdom`, `col_phylum`, `col_class`, `col_order`, `ATTRIBUTE_col_family`, `col_tribe`, `ATTRIBUTE_col_genus`, and `col_species`; when these are absent or empty, the configured `taxon_column` is resolved through LOTUS. Taxonomic score for a candidate is the **maximum deepest shared-rank score across that feature's contributing samples**, without abundance weighting; intensity decides only whether a sample contributes. This retains the matcher's rank score rather than copying the enhancer's count of matching ranks. A missing feature row, zero biological intensities, or unresolved taxonomy gets **no taxonomic bonus**, never a batch-wide fallback. A global `query` and feature sources are mutually exclusive; the legacy single-taxon search remains available for homogeneous queries.
+
+After loading the network JSON in `spectral-network-gui`, use **Spectral Search → Load matcher search JSON** to inspect the feature-specific hits. The saved artifacts do not require `cargo run -- serve`.
+
 Native searches use Rayon for spectral scoring and MGF record conversion. Hungarian library searches use a sorted precursor-m/z lookup, while Flash-backed linear cosine and entropy searches prune by `precursor_mz_tolerance` **inside** their indexes before fragment scoring. Indexed searches retain one scratch state per Rayon worker (plus a fallback slot) across task splits and successive files using the same prepared library; scoring progress still counts the logical pair total.
 
 All file-based search metrics reuse the parsed and preprocessed library within one process; Flash-backed metrics also reuse their built similarity index. The one-library prepared cache is replaced when the canonical MGF path, file size/mtime, parse settings, metric computation settings, or precursor-m/z tolerance changes. LOTUS taxonomy metadata is cached separately and invalidated when its source changes. Restarting the process rebuilds both indexes. `RAYON_NUM_THREADS` caps the shared scoring pool, but the maximum hardware thread count is not necessarily fastest: compare elapsed times for representative searches at several settings, especially if other work runs concurrently.

@@ -89,8 +89,15 @@ struct SearchOutputConfig {
 #[cfg(not(target_arch = "wasm32"))]
 #[derive(Deserialize)]
 struct SearchTaxonomyConfig {
-    query: String,
+    #[serde(default)]
+    query: Option<String>,
     lotus_csv: PathBuf,
+    #[serde(default)]
+    feature_quant_csv: Option<PathBuf>,
+    #[serde(default)]
+    sample_metadata_csv: Option<PathBuf>,
+    #[serde(default)]
+    taxon_column: Option<String>,
     #[serde(default)]
     validate_with_otol: bool,
     #[serde(default)]
@@ -651,12 +658,35 @@ fn run_search_job(
         },
         taxonomy: job
             .taxonomy
-            .map(|taxonomy| spectral_matcher::SearchTaxonomyRequest {
-                query_text: taxonomy.query,
-                lotus_source_label: taxonomy.lotus_csv.display().to_string(),
-                lotus_csv_text: None,
-                lotus_csv_path: Some(taxonomy.lotus_csv.display().to_string()),
-            }),
+            .map(|taxonomy| {
+                let feature_sources =
+                    match (taxonomy.feature_quant_csv, taxonomy.sample_metadata_csv) {
+                        (Some(quant), Some(metadata)) => {
+                            Some(spectral_matcher::FeatureTaxonomySources {
+                                quant_csv_text: None,
+                                quant_csv_path: Some(quant.display().to_string()),
+                                metadata_csv_text: None,
+                                metadata_csv_path: Some(metadata.display().to_string()),
+                                taxon_column: taxonomy
+                                    .taxon_column
+                                    .unwrap_or_else(|| "field_taxon_name_unified".to_string()),
+                            })
+                        }
+                        (None, None) => None,
+                        _ => return Err(
+                            "feature_quant_csv and sample_metadata_csv must be provided together"
+                                .to_string(),
+                        ),
+                    };
+                Ok(spectral_matcher::SearchTaxonomyRequest {
+                    query_text: taxonomy.query.unwrap_or_default(),
+                    lotus_source_label: taxonomy.lotus_csv.display().to_string(),
+                    lotus_csv_text: None,
+                    lotus_csv_path: Some(taxonomy.lotus_csv.display().to_string()),
+                    feature_sources,
+                })
+            })
+            .transpose()?,
         query_key: job.output.query_key,
     };
     let progress = CliProgress::new(format!("[search:{label}]"));
@@ -690,12 +720,12 @@ fn validate_search_taxonomy_query(
     if !taxonomy.validate_with_otol {
         return Ok(());
     }
-
-    let accepted = spectral_matcher::validate_otol_taxon_name(
-        &taxonomy.query,
-        taxonomy.otol_context.as_deref(),
-    )
-    .map_err(|err| format!("[search:{label}] {err}"))?;
+    let Some(query) = taxonomy.query.as_deref() else {
+        return Ok(());
+    };
+    let accepted =
+        spectral_matcher::validate_otol_taxon_name(query, taxonomy.otol_context.as_deref())
+            .map_err(|err| format!("[search:{label}] {err}"))?;
     eprintln!(
         "[search:{label}] OTOL accepted taxon: {}{}",
         accepted.accepted_name,

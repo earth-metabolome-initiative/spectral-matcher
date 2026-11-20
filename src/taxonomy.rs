@@ -287,8 +287,12 @@ impl LotusMetadataIndex {
                     matched_organism_wikidata: biosource.organism_wikidata.clone(),
                     matched_short_inchikey: Some(short_inchikey.to_string()),
                     matched_lotus_inchikey: biosource.matched_lotus_inchikey.clone(),
-                    matched_lotus_structure_wikidata: biosource.matched_lotus_structure_wikidata.clone(),
-                    matched_lotus_reference_wikidata: biosource.matched_lotus_reference_wikidata.clone(),
+                    matched_lotus_structure_wikidata: biosource
+                        .matched_lotus_structure_wikidata
+                        .clone(),
+                    matched_lotus_reference_wikidata: biosource
+                        .matched_lotus_reference_wikidata
+                        .clone(),
                     matched_lotus_reference_doi: biosource.matched_lotus_reference_doi.clone(),
                 });
             }

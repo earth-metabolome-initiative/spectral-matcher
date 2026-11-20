@@ -142,7 +142,8 @@ pub struct SearchRequest {
 /// Optional taxonomic-reranking inputs for library search.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SearchTaxonomyRequest {
-    /// Taxon label or Wikidata identifier used to resolve the query lineage.
+    /// Optional global taxon label; omit when feature-level sample sources are supplied.
+    #[serde(default)]
     pub query_text: String,
     /// Human-readable label for the LOTUS metadata source.
     pub lotus_source_label: String,
@@ -152,6 +153,24 @@ pub struct SearchTaxonomyRequest {
     /// Filesystem path to the LOTUS CSV file.
     #[serde(default)]
     pub lotus_csv_path: Option<String>,
+    /// Feature intensities and sample taxonomy for per-feature reranking.
+    #[serde(default)]
+    pub feature_sources: Option<FeatureTaxonomySources>,
+}
+
+/// Inputs joining a feature's positive sample intensities to sample taxonomy.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct FeatureTaxonomySources {
+    #[serde(default)]
+    pub quant_csv_text: Option<String>,
+    #[serde(default)]
+    pub quant_csv_path: Option<String>,
+    #[serde(default)]
+    pub metadata_csv_text: Option<String>,
+    #[serde(default)]
+    pub metadata_csv_path: Option<String>,
+    /// Taxon-name column used when a metadata row has no populated lineage columns.
+    pub taxon_column: String,
 }
 
 /// Spectrum payload embedded in a network artifact.

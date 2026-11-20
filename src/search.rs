@@ -27,6 +27,7 @@ use crate::api::{
     SearchArtifact, SearchArtifactHit, SearchArtifactResult, SearchRequest,
 };
 use crate::export::{SearchQueryKey, export_search_tsv};
+use crate::feature_taxonomy::{FeatureTaxonomyIndex, load_feature_taxonomy};
 use crate::mgf::load_mgf_bytes_with_policy;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::mgf::{NativeLoadMessage, start_native_mgf_load_with_policy};
@@ -114,13 +115,14 @@ struct SearchCandidate {
     matched_lotus_reference_doi: Option<String>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 struct SearchTaxonomyConfig {
     #[cfg(not(target_arch = "wasm32"))]
     lotus: Arc<LotusMetadataIndex>,
     #[cfg(target_arch = "wasm32")]
     lotus: LotusMetadataIndex,
-    query: ResolvedLotusQuery,
+    query: Option<ResolvedLotusQuery>,
+    features: Option<FeatureTaxonomyIndex>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -310,16 +312,40 @@ fn load_search_taxonomy_config(
         ));
     };
 
-    let query = lotus
-        .resolve_query_lineage(&request.query_text)
-        .ok_or_else(|| {
-            format!(
-                "Biosource not found in LOTUS: {}",
-                request.query_text.trim()
-            )
-        })?;
-
-    Ok(SearchTaxonomyConfig { lotus, query })
+    if !request.query_text.trim().is_empty() && request.feature_sources.is_some() {
+        return Err(
+            "provide either a global taxonomy query or feature sources, not both".to_string(),
+        );
+    }
+    let query = if request.query_text.trim().is_empty() {
+        None
+    } else {
+        Some(
+            lotus
+                .resolve_query_lineage(&request.query_text)
+                .ok_or_else(|| {
+                    format!(
+                        "Biosource not found in LOTUS: {}",
+                        request.query_text.trim()
+                    )
+                })?,
+        )
+    };
+    let features = request
+        .feature_sources
+        .as_ref()
+        .map(|sources| load_feature_taxonomy(sources, &lotus))
+        .transpose()?;
+    if query.is_none() && features.is_none() {
+        return Err(
+            "taxonomy requires a query or feature quantification and sample metadata".to_string(),
+        );
+    }
+    Ok(SearchTaxonomyConfig {
+        lotus,
+        query,
+        features,
+    })
 }
 
 /// Shares the immutable LOTUS index across file-based native searches without
@@ -1892,7 +1918,8 @@ fn build_search_artifact_result(
         library_count: base.library_count,
         metric: base.metric,
         taxonomic_reranking_applied: taxonomy.is_some(),
-        taxonomic_query: taxonomy.map(|config| config.query.query_label.clone()),
+        taxonomic_query: taxonomy
+            .and_then(|config| config.query.as_ref().map(|query| query.query_label.clone())),
     }
 }
 
@@ -1907,7 +1934,7 @@ fn enrich_search_hits(
     if let Some(taxonomy) = taxonomy {
         let candidates = base_hits
             .iter()
-            .map(|hit| build_search_candidate(hit, library, Some(taxonomy)))
+            .map(|hit| build_search_candidate(hit, &queries[hit.query_index], library, taxonomy))
             .collect::<Vec<_>>();
         finalize_search_artifact_candidates(candidates, queries, library, top_n)
     } else {
@@ -1946,8 +1973,9 @@ fn enrich_search_hits(
 /// Combines a base spectral hit with optional taxonomic metadata.
 fn build_search_candidate(
     hit: &CandidateHit,
+    query: &SpectrumRecord,
     library: &[SpectrumRecord],
-    taxonomy: Option<&SearchTaxonomyConfig>,
+    taxonomy: &SearchTaxonomyConfig,
 ) -> SearchCandidate {
     let library_record = &library[hit.library_index];
     let (
@@ -1960,12 +1988,31 @@ fn build_search_candidate(
         matched_lotus_structure_wikidata,
         matched_lotus_reference_wikidata,
         matched_lotus_reference_doi,
-    ) = if let Some(config) = taxonomy {
+    ) = {
         let short_inchikey = short_inchikey_from_record(library_record);
-        match short_inchikey
-            .as_deref()
-            .and_then(|short| config.lotus.match_candidate(short, &config.query.lineage))
-        {
+        let matched = short_inchikey.as_deref().and_then(|short| {
+            if let Some(features) = taxonomy.features.as_ref() {
+                query
+                    .meta
+                    .feature_id
+                    .as_deref()
+                    .and_then(|id| features.features.get(id))
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|&sample| {
+                        taxonomy
+                            .lotus
+                            .match_candidate(short, &features.samples[sample])
+                    })
+                    .max_by_key(|matched| matched.score)
+            } else {
+                taxonomy
+                    .query
+                    .as_ref()
+                    .and_then(|query| taxonomy.lotus.match_candidate(short, &query.lineage))
+            }
+        });
+        match matched {
             Some(matched) => (
                 f64::from(matched.score),
                 matched.matched_organism_name,
@@ -1977,10 +2024,18 @@ fn build_search_candidate(
                 matched.matched_lotus_reference_wikidata,
                 matched.matched_lotus_reference_doi,
             ),
-            None => (0.0, None, None, None, short_inchikey, None, None, None, None),
+            None => (
+                0.0,
+                None,
+                None,
+                None,
+                short_inchikey,
+                None,
+                None,
+                None,
+                None,
+            ),
         }
-    } else {
-        (0.0, None, None, None, None, None, None, None, None)
     };
 
     SearchCandidate {
@@ -2239,12 +2294,13 @@ mod tests {
             lotus_source_label: "test LOTUS".to_string(),
             lotus_csv_text: None,
             lotus_csv_path: Some(path.to_str().expect("UTF-8 temporary path").to_string()),
+            feature_sources: None,
         };
         let first = load_search_taxonomy_config(&request).expect("first lookup");
         request.query_text = "Q1".to_string();
         let second = load_search_taxonomy_config(&request).expect("cached lookup");
         assert!(Arc::ptr_eq(&first.lotus, &second.lotus));
-        assert_eq!(second.query.query_label, "Q1");
+        assert_eq!(second.query.as_ref().unwrap().query_label, "Q1");
 
         let second_row = "ZZZZZZZZZZZZZZ-BBBB,Q2,Panax ginseng,Eukaryota,Archaeplastida,Streptophyta,Magnoliopsida,Apiales,Araliaceae,NA,Panax,Panax ginseng,NA\n";
         std::fs::write(&path, format!("{header}{first_row}{second_row}"))
@@ -2252,7 +2308,7 @@ mod tests {
         request.query_text = "Panax ginseng".to_string();
         let updated = load_search_taxonomy_config(&request).expect("updated lookup");
         assert!(!Arc::ptr_eq(&first.lotus, &updated.lotus));
-        assert_eq!(updated.query.query_label, "Panax ginseng");
+        assert_eq!(updated.query.as_ref().unwrap().query_label, "Panax ginseng");
         std::fs::remove_file(&path).expect("remove temporary LOTUS CSV");
     }
 
@@ -2428,6 +2484,7 @@ mod tests {
                     .to_string(),
                 ),
                 lotus_csv_path: None,
+                feature_sources: None,
             }),
             query_key: Some(SearchQueryKey::FeatureId),
         };
@@ -2443,14 +2500,29 @@ mod tests {
         assert_eq!(artifact.result.hits[0].library_index, 0);
         assert_eq!(artifact.result.hits[0].taxonomic_score, 9.0);
         assert_eq!(
-            artifact.library_spectra[0].headers.get("INCHIKEY").map(String::as_str),
+            artifact.library_spectra[0]
+                .headers
+                .get("INCHIKEY")
+                .map(String::as_str),
             Some("AAAAAAAAAAAAAA-CANDIDATE")
         );
         let support = &artifact.result.hits[0];
-        assert_eq!(support.matched_lotus_inchikey.as_deref(), Some("AAAAAAAAAAAAAA-SUPPORT"));
-        assert_eq!(support.matched_lotus_structure_wikidata.as_deref(), Some("Q105282296"));
-        assert_eq!(support.matched_lotus_reference_wikidata.as_deref(), Some("Q105282295"));
-        assert_eq!(support.matched_lotus_reference_doi.as_deref(), Some("10.1007/BF00565881"));
+        assert_eq!(
+            support.matched_lotus_inchikey.as_deref(),
+            Some("AAAAAAAAAAAAAA-SUPPORT")
+        );
+        assert_eq!(
+            support.matched_lotus_structure_wikidata.as_deref(),
+            Some("Q105282296")
+        );
+        assert_eq!(
+            support.matched_lotus_reference_wikidata.as_deref(),
+            Some("Q105282295")
+        );
+        assert_eq!(
+            support.matched_lotus_reference_doi.as_deref(),
+            Some("10.1007/BF00565881")
+        );
         assert_eq!(
             artifact.result.hits[0].matched_organism_name.as_deref(),
             Some("Withania somnifera")
@@ -2506,6 +2578,7 @@ mod tests {
                     .to_string(),
                 ),
                 lotus_csv_path: None,
+                feature_sources: None,
             }),
             query_key: Some(SearchQueryKey::FeatureId),
         };

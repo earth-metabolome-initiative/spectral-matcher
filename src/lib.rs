@@ -10,6 +10,7 @@ pub mod api;
 pub mod consensus;
 pub mod databases;
 pub mod export;
+mod feature_taxonomy;
 pub mod mgf;
 pub mod model;
 pub mod network;
@@ -23,10 +24,10 @@ pub mod taxonomy;
 pub use api::{
     ConsensusAnnotation, ConsensusArtifact, ConsensusArtifactResult, ConsensusClass,
     ConsensusInputSummary, ConsensusMergeParams, ConsensusQueryResult, ConsensusSupportHit,
-    HealthResponse, JobCreatedResponse, JobProgress, JobProgressStage, JobStatus,
-    JobStatusResponse, MatcherJobResult, MissingPrecursorMz, NetworkArtifact, NetworkBuildParams,
-    NetworkRequest, NetworkSpectrum, ParseConfig, SearchArtifact, SearchArtifactHit,
-    SearchArtifactResult, SearchRequest, SearchTaxonomyRequest,
+    FeatureTaxonomySources, HealthResponse, JobCreatedResponse, JobProgress, JobProgressStage,
+    JobStatus, JobStatusResponse, MatcherJobResult, MissingPrecursorMz, NetworkArtifact,
+    NetworkBuildParams, NetworkRequest, NetworkSpectrum, ParseConfig, SearchArtifact,
+    SearchArtifactHit, SearchArtifactResult, SearchRequest, SearchTaxonomyRequest,
 };
 /// Post-search consensus fusion across two library-search artifacts.
 pub use consensus::merge_search_artifacts;

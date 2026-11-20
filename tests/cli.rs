@@ -377,6 +377,111 @@ lotus_csv = "{}"
 }
 
 #[test]
+fn search_cli_reranks_each_feature_using_its_positive_sample_contributors() {
+    let dir = temp_dir("search_feature_taxonomy");
+    let query = dir.join("query.mgf");
+    let library = dir.join("library.mgf");
+    let lotus = dir.join("lotus.csv");
+    let quant = dir.join("quant.csv");
+    let metadata = dir.join("metadata.csv");
+    let config = dir.join("config.toml");
+    let output_json = dir.join("search.json");
+    write_file(
+        &query,
+        "BEGIN IONS\nFEATURE_ID=1\nPEPMASS=100\n10 100\n20 80\n30 50\nEND IONS\n\
+         BEGIN IONS\nFEATURE_ID=2\nPEPMASS=100\n10 100\n20 80\n30 50\nEND IONS\n\
+         BEGIN IONS\nFEATURE_ID=3\nPEPMASS=100\n10 100\n20 80\n30 50\nEND IONS\n\
+         BEGIN IONS\nFEATURE_ID=4\nPEPMASS=100\n10 100\n20 80\n30 50\nEND IONS\n",
+    );
+    write_file(
+        &library,
+        "BEGIN IONS\nNAME=withania\nINCHIKEY=AAAAAAAAAAAAAA-111\nPEPMASS=100\n10 100\n21 80\n35 30\nEND IONS\n\
+         BEGIN IONS\nNAME=panax\nINCHIKEY=BBBBBBBBBBBBBB-222\nPEPMASS=100\n10 100\n20 80\n30 50\nEND IONS\n",
+    );
+    write_file(
+        &lotus,
+        concat!(
+            "structure_inchikey,organism_wikidata,organism_name,organism_taxonomy_01domain,organism_taxonomy_02kingdom,organism_taxonomy_03phylum,organism_taxonomy_04class,organism_taxonomy_05order,organism_taxonomy_06family,organism_taxonomy_07tribe,organism_taxonomy_08genus,organism_taxonomy_09species,organism_taxonomy_10varietas\n",
+            "AAAAAAAAAAAAAA-111,Q1,Withania somnifera,Eukaryota,Archaeplastida,Streptophyta,Magnoliopsida,Solanales,Solanaceae,NA,Withania,Withania somnifera,NA\n",
+            "BBBBBBBBBBBBBB-222,Q2,Panax ginseng,Eukaryota,Archaeplastida,Streptophyta,Magnoliopsida,Apiales,Araliaceae,NA,Panax,Panax ginseng,NA\n",
+        ),
+    );
+    write_file(
+        &metadata,
+        "filename,sample_type,field_taxon_name_unified,ATTRIBUTE_col_genus,col_species\n\
+         w.mzML,sample,Withania somnifera,Withania,Withania somnifera\n\
+         p.mzML,sample,Unlisted Panax,Panax,\n\
+         qc.mzML,QC,NA,NA,NA\n",
+    );
+    write_file(
+        &quant,
+        "row ID,row m/z,w.mzML Peak area,p.mzML Peak area,qc.mzML Peak area,\n\
+         1,100,42,1,1000,\n\
+         2,100,0,50,1000,\n\
+         3,100,0,0,1000,\n",
+    );
+    write_file(
+        &config,
+        &format!(
+            r#"[[jobs]]
+query_mgf = "{}"
+library_mgf = "{}"
+output_json = "{}"
+
+[jobs.parse]
+identifier = "FEATURE_ID"
+library_identifier = "INCHIKEY"
+min_peaks = 1
+
+[jobs.search]
+metric = "LinearCosine"
+precursor_mz_tolerance = 0.1
+fragment_mz_tolerance = 0.2
+mz_power = 0.0
+intensity_power = 1.0
+top_n_peaks = 3
+min_matched_peaks = 1
+min_similarity_threshold = 0.0
+top_n = 1
+
+[jobs.taxonomy]
+lotus_csv = "{}"
+feature_quant_csv = "{}"
+sample_metadata_csv = "{}"
+taxon_column = "field_taxon_name_unified"
+"#,
+            query.display(),
+            library.display(),
+            output_json.display(),
+            lotus.display(),
+            quant.display(),
+            metadata.display(),
+        ),
+    );
+    let output = Command::new(env!("CARGO_BIN_EXE_spectral-matcher"))
+        .arg("search")
+        .arg("--config")
+        .arg(&config)
+        .output()
+        .expect("run cli");
+    assert!(output.status.success(), "{output:?}");
+    let parsed: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(output_json).expect("search JSON"))
+            .expect("valid search JSON");
+    let hits = parsed["result"]["hits"].as_array().expect("hits");
+    assert_eq!(hits.len(), 4);
+    assert_eq!(hits[0]["library_index"], 0);
+    assert_eq!(hits[0]["taxonomic_score"], 9.0);
+    assert_eq!(hits[1]["library_index"], 1);
+    assert_eq!(hits[1]["taxonomic_score"], 8.0);
+    assert_eq!(hits[2]["library_index"], 1);
+    assert_eq!(hits[2]["taxonomic_score"], 0.0);
+    assert_eq!(hits[3]["library_index"], 1);
+    assert_eq!(hits[3]["taxonomic_score"], 0.0);
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
 fn consensus_cli_merges_two_search_artifacts_into_one_annotation_per_query() {
     let dir = temp_dir("consensus");
     let left = dir.join("gnps.json");

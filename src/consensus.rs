@@ -525,6 +525,7 @@ mod tests {
                 lotus_source_label: "lotus.csv".to_string(),
                 lotus_csv_text: None,
                 lotus_csv_path: None,
+                feature_sources: None,
             }),
             query_key: SearchQueryKey::FeatureId,
             query_spectra,

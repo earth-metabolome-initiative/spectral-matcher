@@ -1,0 +1,33 @@
+# Replace data/ paths with the MGF, MZmine quantification CSV, and sample metadata CSV for your batch.
+output_dir = "out"
+
+[[jobs]]
+name = "mapp_batch_00283_vs_isdb_lotus"
+query_mgf = "data/mapp_batch_00283_iimn_gnps.mgf"
+library_mgf = "databases/isdb_lotus_pos_energySum.mgf"
+
+[jobs.parse]
+identifier = "FEATURE_ID"
+library_identifier = "INCHIKEY"
+min_peaks = 5
+max_peaks = 1000
+
+[jobs.search]
+metric = "HungarianCosine"
+precursor_mz_tolerance = 0.02
+fragment_mz_tolerance = 0.02
+mz_power = 2
+intensity_power = 1.5
+top_n_peaks = 150
+min_matched_peaks = 6
+min_similarity_threshold = 0.2
+top_n = 20
+
+[jobs.taxonomy]
+lotus_csv = "data/lotus/230106_frozen_metadata.csv"
+feature_quant_csv = "data/mapp_batch_00283_iimn_gnps_quant.csv"
+sample_metadata_csv = "data/mapp_batch_00283_metadata.csv"
+taxon_column = "field_taxon_name_unified"
+
+[jobs.output]
+query_key = "FeatureId"
